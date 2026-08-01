@@ -9,5 +9,6 @@ import { PaymentsModule } from '../payments/payments.module'; // 1. Import the m
   imports: [PaymentsModule], // 2. Add it to the imports array!
   controllers: [OrdersController],
   providers: [OrdersService, PrismaService, OrdersGateway], 
+  exports: [OrdersGateway], // lets DeliveriesModule reuse the same gateway/socket server
 })
 export class OrdersModule {}

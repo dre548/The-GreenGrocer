@@ -51,4 +51,40 @@ export class VendorsService {
       // I have removed the "include: { menu_items: true }" line here!
     });
   }
+
+  async getWallet(vendorId: string) {
+    const vendor = await this.prisma.vendor.findUnique({ where: { id: vendorId } });
+    if (!vendor) throw new BadRequestException('Vendor not found');
+    return { balance: vendor.wallet_balance };
+  }
+
+  // Vendor requests a payout: takes the full (or partial) balance out of
+  // their live wallet immediately and logs a PENDING Transaction for Admin
+  // to disburse. Mirrors the pattern the Flutter admin payout queue expects.
+  async requestPayout(vendorId: string, amount: number, method: string) {
+    const vendor = await this.prisma.vendor.findUnique({ where: { id: vendorId } });
+    if (!vendor) throw new BadRequestException('Vendor not found');
+    if (amount <= 0 || amount > vendor.wallet_balance) {
+      throw new BadRequestException('Invalid payout amount');
+    }
+
+    const [, transaction] = await this.prisma.$transaction([
+      this.prisma.vendor.update({
+        where: { id: vendorId },
+        data: { wallet_balance: { decrement: amount } },
+      }),
+      this.prisma.transaction.create({
+        data: {
+          type: 'PAYOUT',
+          party: 'VENDOR',
+          party_id: vendorId,
+          amount,
+          method,
+          status: 'PENDING',
+        },
+      }),
+    ]);
+
+    return { message: 'Payout requested — awaiting admin disbursement.', transaction };
+  }
 }

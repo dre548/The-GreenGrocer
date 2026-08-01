@@ -1,16 +1,26 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import axios from 'axios';
 
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `Missing required environment variable: ${name}. Set it in your .env file (see .env.example) — it must never be hardcoded in source.`,
+    );
+  }
+  return value;
+}
+
 @Injectable()
 export class PaymentsService {
-  // Use Sandbox URLs for testing. Switch to production URLs later.
-  private consumerKey = process.env.MPESA_CONSUMER_KEY || 'UTRVOVmAxyEMyDbm7jHOCoHxTyRMxy7TR30IMtoNo6AENI3r';
-  private consumerSecret = process.env.MPESA_CONSUMER_SECRET || '2prgEnGTeJk9nsKArPuBn5Sl7qGU4HZUK3zyoDhub5qdKQVxYUw5artgcgtEzdgV';
-  private passkey = process.env.MPESA_PASSKEY || 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';
-  private shortcode = process.env.MPESA_SHORTCODE || '174379';
-  
-  // Your ngrok or production domain to receive M-Pesa callbacks
-  private callbackUrl = process.env.CALLBACK_URL || 'https://unsorted-batboy-confront.ngrok-free.de.ngrok.io/payments/callback';
+  // These are read from environment variables only. There is no hardcoded
+  // fallback — if a variable is missing, the app fails fast at startup
+  // instead of silently running with a secret baked into source control.
+  private consumerKey = requireEnv('MPESA_CONSUMER_KEY');
+  private consumerSecret = requireEnv('MPESA_CONSUMER_SECRET');
+  private passkey = requireEnv('MPESA_PASSKEY');
+  private shortcode = requireEnv('MPESA_SHORTCODE');
+  private callbackUrl = requireEnv('CALLBACK_URL');
 
   async getAccessToken(): Promise<string> {
     const credentials = Buffer.from(`${this.consumerKey}:${this.consumerSecret}`).toString('base64');
@@ -62,6 +72,49 @@ export class PaymentsService {
       return response.data;
     } catch (error) {
       throw new InternalServerErrorException('M-Pesa STK Push failed to initiate');
+    }
+  }
+
+  // --- B2C PAYOUT (vendor/rider withdrawals) ---
+  // NOTE: this calls the Daraja B2C endpoint, which requires additional
+  // credentials (initiator name + security credential) beyond STK push.
+  // Wire the two extra env vars below once you have B2C sandbox/production
+  // access from Safaricom, then this is ready to be called from the
+  // payout-disbursement flow.
+  async initiateB2CPayout(phone: string, amount: number, remarks: string) {
+    const token = await this.getAccessToken();
+    const initiatorName = requireEnv('MPESA_INITIATOR_NAME');
+    const securityCredential = requireEnv('MPESA_SECURITY_CREDENTIAL');
+
+    let formattedPhone = phone;
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = '254' + formattedPhone.substring(1);
+    } else if (formattedPhone.startsWith('+')) {
+      formattedPhone = formattedPhone.substring(1);
+    }
+
+    const payload = {
+      InitiatorName: initiatorName,
+      SecurityCredential: securityCredential,
+      CommandID: 'BusinessPayment',
+      Amount: Math.round(amount),
+      PartyA: this.shortcode,
+      PartyB: formattedPhone,
+      Remarks: remarks,
+      QueueTimeOutURL: `${this.callbackUrl}/timeout`,
+      ResultURL: `${this.callbackUrl}/result`,
+      Occasion: 'Payout',
+    };
+
+    try {
+      const response = await axios.post(
+        'https://sandbox.safaricom.co.ke/mpesa/b2c/v1/paymentrequest',
+        payload,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return response.data;
+    } catch (error) {
+      throw new InternalServerErrorException('M-Pesa B2C payout failed to initiate');
     }
   }
 }

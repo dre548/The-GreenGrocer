@@ -11,10 +11,33 @@ import 'package:geolocator/geolocator.dart';
 import 'dart:io';
 import 'dart:async';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-const String mapsSdkKey = "AIzaSyBs64tAAvZpC34zwSvYascVcLoacYUrw-w";
-const String geocodingApiKey = "AIzaSyByAcy2UKG98iWnEAp9U6QSARyGAptzRns";
-const String placesApiKey = "AIzaSyDOK1kj5yUiScAVfdY0zEcal2GFz-i0n_o";
+Future<void> main() async {
+  // 1. Ensure Flutter is ready before doing async work
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // 2. Load the .env file
+  await dotenv.load(fileName: ".env");
+
+  // 3. Safety check (optional but good practice)
+  final mapsKey = dotenv.env['MAPS_SDK_KEY'] ?? '';
+  if (mapsKey.isEmpty) {
+    throw Exception('MAPS_SDK_KEY not set. Check your .env file.');
+  }
+
+  // 4. Run the app WITH the Providers intact
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (context) => AppStateProvider()),
+        ChangeNotifierProvider(create: (context) => CartProvider()),
+        ChangeNotifierProvider(create: (context) => LocationProvider()),
+      ],
+      child: const TheGreengrocerApp(),
+    ),
+  );
+}
 
 void main() {
   runApp(
@@ -662,7 +685,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
 
   Future<void> _updateGlobalAddress(LatLng pos) async {
     try {
-      final url = 'https://maps.googleapis.com/maps/api/geocode/json?latlng=${pos.latitude},${pos.longitude}&key=$geocodingApiKey';
+      final url = 'https://maps.googleapis.com/maps/api/geocode/json?latlng=${pos.latitude},${pos.longitude}&key=${dotenv.env['GEOCODING_API_KEY']}';
       final response = await http.get(Uri.parse(url));
       final data = jsonDecode(response.body);
       if (data['status'] == 'OK' && mounted) {
@@ -681,7 +704,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     if (!mounted) return;
     setState(() => _isLoadingPlaces = true);
     try {
-      String url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${pos.latitude},${pos.longitude}&radius=3000&type=restaurant&key=$placesApiKey';
+      String url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${pos.latitude},${pos.longitude}&radius=3000&type=restaurant&key=${dotenv.env['PLACES_API_KEY']}';
       final response = await http.get(Uri.parse(url));
       final data = jsonDecode(response.body);
 

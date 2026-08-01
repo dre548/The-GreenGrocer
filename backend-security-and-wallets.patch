@@ -1,0 +1,816 @@
+diff --git a/backend/.env.example b/backend/.env.example
+new file mode 100644
+index 0000000..3ae0260
+--- /dev/null
++++ b/backend/.env.example
+@@ -0,0 +1,23 @@
++# Copy this file to .env and fill in real values.
++# .env is already gitignored — never commit real secrets.
++
++# --- Database ---
++DATABASE_URL="postgresql://user:password@localhost:5432/greengrocer"
++
++# --- Redis (cache-manager) ---
++REDIS_URL="redis://localhost:6379"
++
++# --- Auth ---
++# Generate a strong random string, e.g.: openssl rand -base64 48
++JWT_SECRET=""
++
++# --- M-Pesa Daraja (sandbox credentials from developer.safaricom.co.ke) ---
++MPESA_CONSUMER_KEY=""
++MPESA_CONSUMER_SECRET=""
++MPESA_PASSKEY=""
++MPESA_SHORTCODE=""
++CALLBACK_URL="https://your-ngrok-or-prod-domain/payments/callback"
++
++# --- M-Pesa B2C payouts (only needed once vendor/rider payouts go live) ---
++MPESA_INITIATOR_NAME=""
++MPESA_SECURITY_CREDENTIAL=""
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index 1ee8ed5..0766361 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -23,7 +23,34 @@ enum OrderStatus {
+   PLACED
+   ACCEPTED_BY_VENDOR
+   READY_FOR_PICKUP
++  RIDER_ASSIGNED
++  PICKED_UP
+   DELIVERED
++  CANCELLED
++}
++
++enum TransactionType {
++  CHARGE
++  PAYOUT
++  REFUND
++  CREDIT
++}
++
++enum TransactionParty {
++  VENDOR
++  RIDER
++  PLATFORM
++}
++
++enum TransactionStatus {
++  PENDING
++  COMPLETED
++  FAILED
++}
++
++enum RatingTarget {
++  VENDOR
++  RIDER
+ }
+ 
+ model User {
+@@ -43,24 +70,27 @@ model Vendor {
+   user_id         String         @unique
+   business_name   String         
+   location        String?        
+-  opening_hours   String?        // <-- RESTORED!
++  opening_hours   String?
+   commission_rate Float?         
+-  status          ApprovalStatus @default(PENDING) 
++  status          ApprovalStatus @default(PENDING)
++  wallet_balance  Float          @default(0)
+ 
+   user            User           @relation(fields: [user_id], references: [id])
+   orders          Order[]
+ }
+ 
+ model Rider {
+-  id            String         @id @default(uuid())
+-  user_id       String         @unique
+-  vehicle_type  String         
+-  plate_number  String
+-  id_front_url  String         
+-  id_back_url   String
+-  status        ApprovalStatus @default(PENDING) 
++  id             String         @id @default(uuid())
++  user_id        String         @unique
++  vehicle_type   String         
++  plate_number   String
++  id_front_url   String         
++  id_back_url    String
++  status         ApprovalStatus @default(PENDING)
++  wallet_balance Float          @default(0)
+ 
+-  user          User           @relation(fields: [user_id], references: [id])
++  user           User           @relation(fields: [user_id], references: [id])
++  deliveries     Order[]
+ }
+ 
+ model Product {
+@@ -77,6 +107,7 @@ model Order {
+   id             String      @id @default(uuid())
+   customer_id    String
+   vendor_id      String
++  rider_id       String?
+   items          Json
+   subtotal       Int
+   delivery_fee   Int
+@@ -87,4 +118,36 @@ model Order {
+ 
+   customer       User        @relation(fields: [customer_id], references: [id])
+   vendor         Vendor      @relation(fields: [vendor_id], references: [id])
+-}
+\ No newline at end of file
++  rider          Rider?      @relation(fields: [rider_id], references: [id])
++  transactions   Transaction[]
++  ratings        Rating[]
++}
++
++// Ledger of money movement: order charges, vendor/rider payouts, refunds,
++// and wallet credits. This is what the Admin payout dashboard reads from.
++model Transaction {
++  id         String            @id @default(uuid())
++  order_id   String?
++  type       TransactionType
++  party      TransactionParty
++  party_id   String            // vendor.id or rider.id (matches `party`), or "PLATFORM"
++  amount     Float
++  method     String?           // e.g. "M-PESA", "Bank Transfer"
++  status     TransactionStatus @default(PENDING)
++  created_at DateTime          @default(now())
++
++  order      Order?            @relation(fields: [order_id], references: [id])
++}
++
++// Customer ratings for a vendor or rider after a delivered order.
++model Rating {
++  id         String       @id @default(uuid())
++  order_id   String
++  target     RatingTarget
++  target_id  String       // vendor.id or rider.id
++  score      Int
++  comment    String?
++  created_at DateTime     @default(now())
++
++  order      Order        @relation(fields: [order_id], references: [id])
++}
+diff --git a/backend/src/admin/admin.controller.ts b/backend/src/admin/admin.controller.ts
+index ca8f0b2..215619a 100644
+--- a/backend/src/admin/admin.controller.ts
++++ b/backend/src/admin/admin.controller.ts
+@@ -26,4 +26,14 @@ export class AdminController {
+     await this.adminService.approveRider(id);
+     return { message: 'Rider successfully approved and activated!' };
+   }
++
++  @Get('pending-payouts')
++  async getPendingPayouts() {
++    return this.adminService.getPendingPayouts();
++  }
++
++  @Post('disburse-payout/:id')
++  async disbursePayout(@Param('id') id: string) {
++    return this.adminService.disbursePayout(id);
++  }
+ }
+\ No newline at end of file
+diff --git a/backend/src/admin/admin.service.ts b/backend/src/admin/admin.service.ts
+index 0857603..499f7c0 100644
+--- a/backend/src/admin/admin.service.ts
++++ b/backend/src/admin/admin.service.ts
+@@ -40,4 +40,27 @@ export class AdminService {
+       data: { status: 'ACTIVE' },
+     });
+   }
++
++  // --- PAYOUT QUEUE (backs the Admin "Payout Dashboard" tab) ---
++  async getPendingPayouts() {
++    return this.prisma.transaction.findMany({
++      where: { type: 'PAYOUT', status: 'PENDING' },
++      orderBy: { created_at: 'asc' },
++    });
++  }
++
++  async disbursePayout(transactionId: string) {
++    const transaction = await this.prisma.transaction.findUnique({ where: { id: transactionId } });
++    if (!transaction) throw new NotFoundException('Transaction not found');
++    if (transaction.type !== 'PAYOUT') throw new NotFoundException('Not a payout transaction');
++
++    // NOTE: this marks the payout as disbursed in the ledger. Actually
++    // sending the money (M-Pesa B2C to the vendor/rider's phone) is a
++    // separate step — see PaymentsService.initiateB2CPayout, which needs
++    // MPESA_INITIATOR_NAME / MPESA_SECURITY_CREDENTIAL configured first.
++    return this.prisma.transaction.update({
++      where: { id: transactionId },
++      data: { status: 'COMPLETED' },
++    });
++  }
+ }
+\ No newline at end of file
+diff --git a/backend/src/app.module.ts b/backend/src/app.module.ts
+index f8edf6b..913eba7 100644
+--- a/backend/src/app.module.ts
++++ b/backend/src/app.module.ts
+@@ -12,6 +12,7 @@ import { OrdersModule } from './orders/orders.module';
+ import { DeliveriesModule } from './deliveries/deliveries.module';
+ import { ProductsModule } from './products/products.module';
+ import { AdminModule } from './admin/admin.module';
++import { RidersModule } from './riders/riders.module';
+ 
+ @Module({
+   imports: [
+@@ -33,6 +34,7 @@ import { AdminModule } from './admin/admin.module';
+     OrdersModule,
+     DeliveriesModule,
+     ProductsModule,
++    RidersModule,
+   ],
+   controllers: [AppController],
+   providers: [AppService],
+diff --git a/backend/src/auth/auth.guard.ts b/backend/src/auth/auth.guard.ts
+index 822fb6c..4b97002 100644
+--- a/backend/src/auth/auth.guard.ts
++++ b/backend/src/auth/auth.guard.ts
+@@ -15,10 +15,11 @@ export class AuthGuard {
+     }
+     
+     try {
+-      // Verify the token using the same secret key we used to create it
+-      const payload = await this.jwtService.verifyAsync(token, {
+-        secret: 'GREEN_GROCER_SUPER_SECRET_KEY',
+-      });
++      // No secret passed here on purpose — JwtService already has it from
++      // the global JwtModule config (auth.module.ts), which reads it from
++      // JWT_SECRET. Duplicating the secret string in two places is how it
++      // ended up hardcoded before.
++      const payload = await this.jwtService.verifyAsync(token);
+       // Attach the decoded payload (which contains the phone and role) to the request
+       request['user'] = payload;
+     } catch {
+diff --git a/backend/src/auth/auth.module.ts b/backend/src/auth/auth.module.ts
+index 66e9927..4a67675 100644
+--- a/backend/src/auth/auth.module.ts
++++ b/backend/src/auth/auth.module.ts
+@@ -4,15 +4,29 @@ import { AuthService } from './auth.service';
+ import { AuthController } from './auth.controller';
+ import { PrismaService } from '../prisma/prisma.service'; 
+ 
++function requireEnv(name: string): string {
++  const value = process.env[name];
++  if (!value) {
++    throw new Error(
++      `Missing required environment variable: ${name}. Set it in your .env file (see .env.example) — it must never be hardcoded in source.`,
++    );
++  }
++  return value;
++}
++
+ @Module({
+   imports: [
+     JwtModule.register({
+       global: true,
+-      secret: 'GREEN_GROCER_SUPER_SECRET_KEY', 
++      // Was hardcoded as 'GREEN_GROCER_SUPER_SECRET_KEY' in source — anyone
++      // reading the public repo could forge a valid token for ANY user,
++      // including ADMIN. Now read from env only; see auth.guard.ts, which
++      // must use the exact same secret to verify tokens.
++      secret: requireEnv('JWT_SECRET'),
+       signOptions: { expiresIn: '7d' }, 
+     }),
+   ],
+   providers: [AuthService, PrismaService],
+   controllers: [AuthController],
+ })
+-export class AuthModule {}
+\ No newline at end of file
++export class AuthModule {}
+diff --git a/backend/src/deliveries/deliveries.controller.ts b/backend/src/deliveries/deliveries.controller.ts
+index fe61076..31825cd 100644
+--- a/backend/src/deliveries/deliveries.controller.ts
++++ b/backend/src/deliveries/deliveries.controller.ts
+@@ -1,5 +1,6 @@
+-import { Controller, Post, Body, Get, Query, Param, Patch } from '@nestjs/common';
++import { Controller, Post, Body, Get, Query, Param, Patch, UseGuards, Request } from '@nestjs/common';
+ import { DeliveriesService } from './deliveries.service';
++import { AuthGuard } from '../auth/auth.guard';
+ 
+ @Controller('deliveries')
+ export class DeliveriesController {
+@@ -11,16 +12,27 @@ export class DeliveriesController {
+     return this.deliveriesService.findNearbyOrders(parseFloat(lat), parseFloat(lng));
+   }
+ 
++  // Was un-authenticated and took rider_id straight from the request body
++  // (anyone could assign any order to any rider id). Now requires a valid
++  // rider JWT, and the rider is resolved from the authenticated user.
++  @UseGuards(AuthGuard)
+   @Post('accept')
+-  acceptOrder(@Body() body: { order_id: string; rider_id: string; distance_km: number }) {
+-    if (!body.order_id || !body.rider_id || !body.distance_km) {
+-      return { error: 'Order ID, Rider ID, and Distance are required' };
++  acceptOrder(@Body() body: { order_id: string; distance_km: number }, @Request() req: any) {
++    if (!body.order_id || body.distance_km == null) {
++      return { error: 'Order ID and distance are required' };
+     }
+-    return this.deliveriesService.acceptOrder(body.order_id, body.rider_id, body.distance_km);
++    return this.deliveriesService.acceptOrder(body.order_id, req.user.sub, body.distance_km);
+   }
+ 
++  @UseGuards(AuthGuard)
++  @Patch(':id/picked-up')
++  markPickedUp(@Param('id') id: string) {
++    return this.deliveriesService.markPickedUp(id);
++  }
++
++  @UseGuards(AuthGuard)
+   @Patch(':id/deliver')
+   markDelivered(@Param('id') id: string) {
+     return this.deliveriesService.markDelivered(id);
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/backend/src/deliveries/deliveries.module.ts b/backend/src/deliveries/deliveries.module.ts
+index 5642edc..9fb1199 100644
+--- a/backend/src/deliveries/deliveries.module.ts
++++ b/backend/src/deliveries/deliveries.module.ts
+@@ -1,8 +1,10 @@
+ import { Module } from '@nestjs/common';
+ import { DeliveriesService } from './deliveries.service';
+ import { DeliveriesController } from './deliveries.controller';
++import { OrdersModule } from '../orders/orders.module';
+ 
+ @Module({
++  imports: [OrdersModule], // for the shared OrdersGateway (real-time broadcasts)
+   controllers: [DeliveriesController],
+   providers: [DeliveriesService],
+ })
+diff --git a/backend/src/deliveries/deliveries.service.ts b/backend/src/deliveries/deliveries.service.ts
+index 0b77fc5..ea38ae6 100644
+--- a/backend/src/deliveries/deliveries.service.ts
++++ b/backend/src/deliveries/deliveries.service.ts
+@@ -1,9 +1,13 @@
+ import { Injectable, BadRequestException } from '@nestjs/common';
+ import { PrismaService } from '../prisma/prisma.service';
++import { OrdersGateway } from '../orders/orders.gateway';
+ 
+ @Injectable()
+ export class DeliveriesService {
+-  constructor(private readonly prisma: PrismaService) {}
++  constructor(
++    private readonly prisma: PrismaService,
++    private readonly gateway: OrdersGateway,
++  ) {}
+ 
+   // The Haversine Formula: Calculates distance between two GPS points in Kilometers
+   private calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+@@ -17,16 +21,18 @@ export class DeliveriesService {
+     return R * c; 
+   }
+ 
+-  // 1. Rider checks for nearby orders
++  // 1. Rider checks for nearby orders that are ready for a rider to grab
++  // (was 'PLACED' — that's before the vendor has even accepted/prepped it;
++  // riders should only see orders the vendor has marked READY_FOR_PICKUP)
+   async findNearbyOrders(riderLat: number, riderLng: number, radiusKm: number = 5) {
+-    // Fetch all unassigned orders
+     const availableOrders = await this.prisma.order.findMany({
+-      where: { status: 'PLACED' },
++      where: { status: 'READY_FOR_PICKUP', rider_id: null },
+     });
+ 
+-    // Filter orders based on distance (Assuming store locations are hardcoded for this MVP test)
+-    // In production, you would pull the store's exact Lat/Lng from the Vendor table
+-    const storeLat = -1.2921; // Example: Nairobi CBD
++    // TODO: Vendor doesn't store lat/lng yet (only a free-text `location`
++    // string), so distance filtering still uses a hardcoded Nairobi CBD
++    // point. Add lat/lng columns to Vendor to make this real per-store.
++    const storeLat = -1.2921;
+     const storeLng = 36.8219;
+ 
+     const nearbyOrders = availableOrders.filter(order => {
+@@ -40,33 +46,37 @@ export class DeliveriesService {
+     };
+   }
+ 
+-  // 2. Rider accepts order (Calculates Commission and changes status)
+-  async acceptOrder(orderId: string, riderId: string, distanceKm: number) {
++  // 2. Rider accepts a delivery — this now actually assigns rider_id and
++  // moves the order to RIDER_ASSIGNED (previously there was no rider_id
++  // column at all, and it incorrectly set status back to READY_FOR_PICKUP,
++  // which is the vendor's state, not the rider's).
++  async acceptOrder(orderId: string, riderUserId: string, distanceKm: number) {
+     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+     if (!order) throw new BadRequestException('Order not found');
+-    if (order.status !== 'PLACED') throw new BadRequestException('Order is already taken');
++    if (order.status !== 'READY_FOR_PICKUP') {
++      throw new BadRequestException('Order is not ready for pickup, or has already been taken');
++    }
++    if (order.rider_id) throw new BadRequestException('Order already has a rider assigned');
++
++    const rider = await this.prisma.rider.findUnique({ where: { user_id: riderUserId } });
++    if (!rider) throw new BadRequestException('Rider profile not found for this user');
++    if (rider.status !== 'ACTIVE') throw new BadRequestException('Rider is not approved yet');
+ 
+     // Commission Logic: 20 KES per km + 5% of the order total
+     const distancePay = distanceKm * 20;
+     const percentagePay = order.total * 0.05;
+     const totalCommission = distancePay + percentagePay;
+ 
+-    // Upgrade the user to RIDER role if they aren't one (similar to Vendor upgrade)
+-    await this.prisma.user.update({
+-      where: { id: riderId },
+-      data: { role: 'RIDER' },
+-    });
+-
+-    // Update the order status to EN_ROUTE
+     const updatedOrder = await this.prisma.order.update({
+       where: { id: orderId },
+-      data: { 
+-        status: 'READY_FOR_PICKUP',
+-        // Note: If your schema doesn't have a rider_id field yet, we rely on the JSON response for now.
+-        // In a future Prisma migration, we would add rider_id and commission to the Order model.
++      data: {
++        status: 'RIDER_ASSIGNED',
++        rider_id: rider.id,
+       },
+     });
+ 
++    this.gateway.broadcastOrderStatus(orderId, 'RIDER_ASSIGNED');
++
+     return {
+       message: 'Order accepted successfully. Head to the store!',
+       commission_earned: totalCommission,
+@@ -75,16 +85,75 @@ export class DeliveriesService {
+     };
+   }
+ 
+-  // 3. Rider drops off food and collects payment
+-  async markDelivered(orderId: string) {
++  // 3. Rider marks pickup complete at the vendor
++  async markPickedUp(orderId: string) {
+     const order = await this.prisma.order.update({
+       where: { id: orderId },
+-      data: { status: 'DELIVERED' },
++      data: { status: 'PICKED_UP' },
+     });
++    this.gateway.broadcastOrderStatus(orderId, 'PICKED_UP');
++    return { message: 'Pickup confirmed. En route to customer.', order };
++  }
++
++  // 4. Rider drops off food — this now actually credits wallets via real
++  // Transaction records, instead of just saying "Payment secured" with no
++  // ledger entry anywhere.
++  async markDelivered(orderId: string) {
++    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
++    if (!order) throw new BadRequestException('Order not found');
++    if (!order.rider_id) throw new BadRequestException('Order has no rider assigned');
++
++    const rider = await this.prisma.rider.findUnique({ where: { id: order.rider_id } });
++    const vendor = await this.prisma.vendor.findUnique({ where: { id: order.vendor_id } });
++    if (!rider || !vendor) throw new BadRequestException('Rider or vendor not found');
++
++    const distancePay = 0; // distance isn't persisted on the order yet — see note below
++    const riderCommission = order.delivery_fee; // simplest model: rider keeps the delivery fee
++    const platformCommissionRate = (vendor.commission_rate ?? 10) / 100;
++    const vendorPayout = order.subtotal * (1 - platformCommissionRate);
++
++    const [updatedOrder] = await this.prisma.$transaction([
++      this.prisma.order.update({
++        where: { id: orderId },
++        data: { status: 'DELIVERED' },
++      }),
++      this.prisma.rider.update({
++        where: { id: rider.id },
++        data: { wallet_balance: { increment: riderCommission } },
++      }),
++      this.prisma.vendor.update({
++        where: { id: vendor.id },
++        data: { wallet_balance: { increment: vendorPayout } },
++      }),
++      this.prisma.transaction.create({
++        data: {
++          order_id: order.id,
++          type: 'CREDIT',
++          party: 'RIDER',
++          party_id: rider.id,
++          amount: riderCommission,
++          status: 'COMPLETED',
++        },
++      }),
++      this.prisma.transaction.create({
++        data: {
++          order_id: order.id,
++          type: 'CREDIT',
++          party: 'VENDOR',
++          party_id: vendor.id,
++          amount: vendorPayout,
++          status: 'COMPLETED',
++        },
++      }),
++    ]);
++
++    this.gateway.broadcastOrderStatus(orderId, 'DELIVERED');
+ 
+     return {
+-      message: 'Delivery complete! Payment secured.',
+-      order,
++      message: 'Delivery complete! Wallets credited.',
++      order: updatedOrder,
++      rider_credited: riderCommission,
++      vendor_credited: vendorPayout,
+     };
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/backend/src/orders/orders.module.ts b/backend/src/orders/orders.module.ts
+index 36d5a9d..4775653 100644
+--- a/backend/src/orders/orders.module.ts
++++ b/backend/src/orders/orders.module.ts
+@@ -9,5 +9,6 @@ import { PaymentsModule } from '../payments/payments.module'; // 1. Import the m
+   imports: [PaymentsModule], // 2. Add it to the imports array!
+   controllers: [OrdersController],
+   providers: [OrdersService, PrismaService, OrdersGateway], 
++  exports: [OrdersGateway], // lets DeliveriesModule reuse the same gateway/socket server
+ })
+ export class OrdersModule {}
+\ No newline at end of file
+diff --git a/backend/src/orders/orders.service.ts b/backend/src/orders/orders.service.ts
+index c012ac9..e83c261 100644
+--- a/backend/src/orders/orders.service.ts
++++ b/backend/src/orders/orders.service.ts
+@@ -64,7 +64,22 @@ export class OrdersService {
+       },
+     });
+ 
+-    // 6. Trigger the Daraja STK Push!
++    // 6. Log the charge in the ledger (PENDING until the M-Pesa callback
++    // confirms it — see the payments callback handler you'll need to add
++    // for CALLBACK_URL to actually flip this to COMPLETED).
++    await this.prisma.transaction.create({
++      data: {
++        order_id: order.id,
++        type: 'CHARGE',
++        party: 'PLATFORM',
++        party_id: vendor.id,
++        amount: total,
++        method: 'M-PESA',
++        status: 'PENDING',
++      },
++    });
++
++    // 7. Trigger the Daraja STK Push!
+     try {
+       await this.paymentsService.initiateStkPush(phone, total, order.id);
+       console.log(`STK Push initiated successfully for order ${order.id}`);
+diff --git a/backend/src/payments/payments.service.ts b/backend/src/payments/payments.service.ts
+index 52b9f53..6c005cd 100644
+--- a/backend/src/payments/payments.service.ts
++++ b/backend/src/payments/payments.service.ts
+@@ -1,16 +1,26 @@
+ import { Injectable, InternalServerErrorException } from '@nestjs/common';
+ import axios from 'axios';
+ 
++function requireEnv(name: string): string {
++  const value = process.env[name];
++  if (!value) {
++    throw new Error(
++      `Missing required environment variable: ${name}. Set it in your .env file (see .env.example) — it must never be hardcoded in source.`,
++    );
++  }
++  return value;
++}
++
+ @Injectable()
+ export class PaymentsService {
+-  // Use Sandbox URLs for testing. Switch to production URLs later.
+-  private consumerKey = process.env.MPESA_CONSUMER_KEY || 'UTRVOVmAxyEMyDbm7jHOCoHxTyRMxy7TR30IMtoNo6AENI3r';
+-  private consumerSecret = process.env.MPESA_CONSUMER_SECRET || '2prgEnGTeJk9nsKArPuBn5Sl7qGU4HZUK3zyoDhub5qdKQVxYUw5artgcgtEzdgV';
+-  private passkey = process.env.MPESA_PASSKEY || 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';
+-  private shortcode = process.env.MPESA_SHORTCODE || '174379';
+-  
+-  // Your ngrok or production domain to receive M-Pesa callbacks
+-  private callbackUrl = process.env.CALLBACK_URL || 'https://unsorted-batboy-confront.ngrok-free.de.ngrok.io/payments/callback';
++  // These are read from environment variables only. There is no hardcoded
++  // fallback — if a variable is missing, the app fails fast at startup
++  // instead of silently running with a secret baked into source control.
++  private consumerKey = requireEnv('MPESA_CONSUMER_KEY');
++  private consumerSecret = requireEnv('MPESA_CONSUMER_SECRET');
++  private passkey = requireEnv('MPESA_PASSKEY');
++  private shortcode = requireEnv('MPESA_SHORTCODE');
++  private callbackUrl = requireEnv('CALLBACK_URL');
+ 
+   async getAccessToken(): Promise<string> {
+     const credentials = Buffer.from(`${this.consumerKey}:${this.consumerSecret}`).toString('base64');
+@@ -64,4 +74,47 @@ export class PaymentsService {
+       throw new InternalServerErrorException('M-Pesa STK Push failed to initiate');
+     }
+   }
+-}
+\ No newline at end of file
++
++  // --- B2C PAYOUT (vendor/rider withdrawals) ---
++  // NOTE: this calls the Daraja B2C endpoint, which requires additional
++  // credentials (initiator name + security credential) beyond STK push.
++  // Wire the two extra env vars below once you have B2C sandbox/production
++  // access from Safaricom, then this is ready to be called from the
++  // payout-disbursement flow.
++  async initiateB2CPayout(phone: string, amount: number, remarks: string) {
++    const token = await this.getAccessToken();
++    const initiatorName = requireEnv('MPESA_INITIATOR_NAME');
++    const securityCredential = requireEnv('MPESA_SECURITY_CREDENTIAL');
++
++    let formattedPhone = phone;
++    if (formattedPhone.startsWith('0')) {
++      formattedPhone = '254' + formattedPhone.substring(1);
++    } else if (formattedPhone.startsWith('+')) {
++      formattedPhone = formattedPhone.substring(1);
++    }
++
++    const payload = {
++      InitiatorName: initiatorName,
++      SecurityCredential: securityCredential,
++      CommandID: 'BusinessPayment',
++      Amount: Math.round(amount),
++      PartyA: this.shortcode,
++      PartyB: formattedPhone,
++      Remarks: remarks,
++      QueueTimeOutURL: `${this.callbackUrl}/timeout`,
++      ResultURL: `${this.callbackUrl}/result`,
++      Occasion: 'Payout',
++    };
++
++    try {
++      const response = await axios.post(
++        'https://sandbox.safaricom.co.ke/mpesa/b2c/v1/paymentrequest',
++        payload,
++        { headers: { Authorization: `Bearer ${token}` } }
++      );
++      return response.data;
++    } catch (error) {
++      throw new InternalServerErrorException('M-Pesa B2C payout failed to initiate');
++    }
++  }
++}
+diff --git a/backend/src/riders/riders.controller.ts b/backend/src/riders/riders.controller.ts
+new file mode 100644
+index 0000000..944dd79
+--- /dev/null
++++ b/backend/src/riders/riders.controller.ts
+@@ -0,0 +1,20 @@
++import { Controller, Get, Post, Body, Param } from '@nestjs/common';
++import { RidersService } from './riders.service';
++
++@Controller('riders')
++export class RidersController {
++  constructor(private readonly ridersService: RidersService) {}
++
++  @Get(':id/wallet')
++  getWallet(@Param('id') id: string) {
++    return this.ridersService.getWallet(id);
++  }
++
++  @Post(':id/request-payout')
++  requestPayout(@Param('id') id: string, @Body() body: { amount: number; method: string }) {
++    if (!body.amount || !body.method) {
++      return { error: 'Amount and method are required.' };
++    }
++    return this.ridersService.requestPayout(id, body.amount, body.method);
++  }
++}
+diff --git a/backend/src/riders/riders.module.ts b/backend/src/riders/riders.module.ts
+new file mode 100644
+index 0000000..2a3ba8a
+--- /dev/null
++++ b/backend/src/riders/riders.module.ts
+@@ -0,0 +1,9 @@
++import { Module } from '@nestjs/common';
++import { RidersController } from './riders.controller';
++import { RidersService } from './riders.service';
++
++@Module({
++  controllers: [RidersController],
++  providers: [RidersService],
++})
++export class RidersModule {}
+diff --git a/backend/src/riders/riders.service.ts b/backend/src/riders/riders.service.ts
+new file mode 100644
+index 0000000..32fea7e
+--- /dev/null
++++ b/backend/src/riders/riders.service.ts
+@@ -0,0 +1,42 @@
++import { Injectable, BadRequestException } from '@nestjs/common';
++import { PrismaService } from '../prisma/prisma.service';
++
++@Injectable()
++export class RidersService {
++  constructor(private readonly prisma: PrismaService) {}
++
++  async getWallet(riderId: string) {
++    const rider = await this.prisma.rider.findUnique({ where: { id: riderId } });
++    if (!rider) throw new BadRequestException('Rider not found');
++    return { balance: rider.wallet_balance };
++  }
++
++  // Same pattern as VendorsService.requestPayout: takes the balance out of
++  // the wallet immediately and logs a PENDING Transaction for Admin.
++  async requestPayout(riderId: string, amount: number, method: string) {
++    const rider = await this.prisma.rider.findUnique({ where: { id: riderId } });
++    if (!rider) throw new BadRequestException('Rider not found');
++    if (amount <= 0 || amount > rider.wallet_balance) {
++      throw new BadRequestException('Invalid payout amount');
++    }
++
++    const [, transaction] = await this.prisma.$transaction([
++      this.prisma.rider.update({
++        where: { id: riderId },
++        data: { wallet_balance: { decrement: amount } },
++      }),
++      this.prisma.transaction.create({
++        data: {
++          type: 'PAYOUT',
++          party: 'RIDER',
++          party_id: riderId,
++          amount,
++          method,
++          status: 'PENDING',
++        },
++      }),
++    ]);
++
++    return { message: 'Payout requested — awaiting admin disbursement.', transaction };
++  }
++}
+diff --git a/backend/src/vendors/vendors.controller.ts b/backend/src/vendors/vendors.controller.ts
+index b7638c5..67f6d30 100644
+--- a/backend/src/vendors/vendors.controller.ts
++++ b/backend/src/vendors/vendors.controller.ts
+@@ -1,4 +1,4 @@
+-import { Controller, Get, Post, Body } from '@nestjs/common';
++import { Controller, Get, Post, Body, Param } from '@nestjs/common';
+ import { VendorsService } from './vendors.service';
+ 
+ @Controller('vendors')
+@@ -17,4 +17,17 @@ export class VendorsController {
+   findAllActive() {
+     return this.vendorsService.findAllActive();
+   }
++
++  @Get(':id/wallet')
++  getWallet(@Param('id') id: string) {
++    return this.vendorsService.getWallet(id);
++  }
++
++  @Post(':id/request-payout')
++  requestPayout(@Param('id') id: string, @Body() body: { amount: number; method: string }) {
++    if (!body.amount || !body.method) {
++      return { error: 'Amount and method are required.' };
++    }
++    return this.vendorsService.requestPayout(id, body.amount, body.method);
++  }
+ }
+\ No newline at end of file
+diff --git a/backend/src/vendors/vendors.service.ts b/backend/src/vendors/vendors.service.ts
+index 125eaeb..c1bd309 100644
+--- a/backend/src/vendors/vendors.service.ts
++++ b/backend/src/vendors/vendors.service.ts
+@@ -51,4 +51,40 @@ export class VendorsService {
+       // I have removed the "include: { menu_items: true }" line here!
+     });
+   }
++
++  async getWallet(vendorId: string) {
++    const vendor = await this.prisma.vendor.findUnique({ where: { id: vendorId } });
++    if (!vendor) throw new BadRequestException('Vendor not found');
++    return { balance: vendor.wallet_balance };
++  }
++
++  // Vendor requests a payout: takes the full (or partial) balance out of
++  // their live wallet immediately and logs a PENDING Transaction for Admin
++  // to disburse. Mirrors the pattern the Flutter admin payout queue expects.
++  async requestPayout(vendorId: string, amount: number, method: string) {
++    const vendor = await this.prisma.vendor.findUnique({ where: { id: vendorId } });
++    if (!vendor) throw new BadRequestException('Vendor not found');
++    if (amount <= 0 || amount > vendor.wallet_balance) {
++      throw new BadRequestException('Invalid payout amount');
++    }
++
++    const [, transaction] = await this.prisma.$transaction([
++      this.prisma.vendor.update({
++        where: { id: vendorId },
++        data: { wallet_balance: { decrement: amount } },
++      }),
++      this.prisma.transaction.create({
++        data: {
++          type: 'PAYOUT',
++          party: 'VENDOR',
++          party_id: vendorId,
++          amount,
++          method,
++          status: 'PENDING',
++        },
++      }),
++    ]);
++
++    return { message: 'Payout requested — awaiting admin disbursement.', transaction };
++  }
+ }
+\ No newline at end of file

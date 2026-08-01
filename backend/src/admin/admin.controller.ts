@@ -26,4 +26,14 @@ export class AdminController {
     await this.adminService.approveRider(id);
     return { message: 'Rider successfully approved and activated!' };
   }
+
+  @Get('pending-payouts')
+  async getPendingPayouts() {
+    return this.adminService.getPendingPayouts();
+  }
+
+  @Post('disburse-payout/:id')
+  async disbursePayout(@Param('id') id: string) {
+    return this.adminService.disbursePayout(id);
+  }
 }

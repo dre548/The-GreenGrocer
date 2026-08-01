@@ -15,10 +15,11 @@ export class AuthGuard {
     }
     
     try {
-      // Verify the token using the same secret key we used to create it
-      const payload = await this.jwtService.verifyAsync(token, {
-        secret: 'GREEN_GROCER_SUPER_SECRET_KEY',
-      });
+      // No secret passed here on purpose — JwtService already has it from
+      // the global JwtModule config (auth.module.ts), which reads it from
+      // JWT_SECRET. Duplicating the secret string in two places is how it
+      // ended up hardcoded before.
+      const payload = await this.jwtService.verifyAsync(token);
       // Attach the decoded payload (which contains the phone and role) to the request
       request['user'] = payload;
     } catch {

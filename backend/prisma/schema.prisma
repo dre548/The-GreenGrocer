@@ -23,7 +23,34 @@ enum OrderStatus {
   PLACED
   ACCEPTED_BY_VENDOR
   READY_FOR_PICKUP
+  RIDER_ASSIGNED
+  PICKED_UP
   DELIVERED
+  CANCELLED
+}
+
+enum TransactionType {
+  CHARGE
+  PAYOUT
+  REFUND
+  CREDIT
+}
+
+enum TransactionParty {
+  VENDOR
+  RIDER
+  PLATFORM
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum RatingTarget {
+  VENDOR
+  RIDER
 }
 
 model User {
@@ -43,24 +70,27 @@ model Vendor {
   user_id         String         @unique
   business_name   String         
   location        String?        
-  opening_hours   String?        // <-- RESTORED!
+  opening_hours   String?
   commission_rate Float?         
-  status          ApprovalStatus @default(PENDING) 
+  status          ApprovalStatus @default(PENDING)
+  wallet_balance  Float          @default(0)
 
   user            User           @relation(fields: [user_id], references: [id])
   orders          Order[]
 }
 
 model Rider {
-  id            String         @id @default(uuid())
-  user_id       String         @unique
-  vehicle_type  String         
-  plate_number  String
-  id_front_url  String         
-  id_back_url   String
-  status        ApprovalStatus @default(PENDING) 
+  id             String         @id @default(uuid())
+  user_id        String         @unique
+  vehicle_type   String         
+  plate_number   String
+  id_front_url   String         
+  id_back_url    String
+  status         ApprovalStatus @default(PENDING)
+  wallet_balance Float          @default(0)
 
-  user          User           @relation(fields: [user_id], references: [id])
+  user           User           @relation(fields: [user_id], references: [id])
+  deliveries     Order[]
 }
 
 model Product {
@@ -77,6 +107,7 @@ model Order {
   id             String      @id @default(uuid())
   customer_id    String
   vendor_id      String
+  rider_id       String?
   items          Json
   subtotal       Int
   delivery_fee   Int
@@ -87,4 +118,36 @@ model Order {
 
   customer       User        @relation(fields: [customer_id], references: [id])
   vendor         Vendor      @relation(fields: [vendor_id], references: [id])
+  rider          Rider?      @relation(fields: [rider_id], references: [id])
+  transactions   Transaction[]
+  ratings        Rating[]
+}
+
+// Ledger of money movement: order charges, vendor/rider payouts, refunds,
+// and wallet credits. This is what the Admin payout dashboard reads from.
+model Transaction {
+  id         String            @id @default(uuid())
+  order_id   String?
+  type       TransactionType
+  party      TransactionParty
+  party_id   String            // vendor.id or rider.id (matches `party`), or "PLATFORM"
+  amount     Float
+  method     String?           // e.g. "M-PESA", "Bank Transfer"
+  status     TransactionStatus @default(PENDING)
+  created_at DateTime          @default(now())
+
+  order      Order?            @relation(fields: [order_id], references: [id])
+}
+
+// Customer ratings for a vendor or rider after a delivered order.
+model Rating {
+  id         String       @id @default(uuid())
+  order_id   String
+  target     RatingTarget
+  target_id  String       // vendor.id or rider.id
+  score      Int
+  comment    String?
+  created_at DateTime     @default(now())
+
+  order      Order        @relation(fields: [order_id], references: [id])
 }

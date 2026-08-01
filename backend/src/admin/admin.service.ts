@@ -40,4 +40,27 @@ export class AdminService {
       data: { status: 'ACTIVE' },
     });
   }
+
+  // --- PAYOUT QUEUE (backs the Admin "Payout Dashboard" tab) ---
+  async getPendingPayouts() {
+    return this.prisma.transaction.findMany({
+      where: { type: 'PAYOUT', status: 'PENDING' },
+      orderBy: { created_at: 'asc' },
+    });
+  }
+
+  async disbursePayout(transactionId: string) {
+    const transaction = await this.prisma.transaction.findUnique({ where: { id: transactionId } });
+    if (!transaction) throw new NotFoundException('Transaction not found');
+    if (transaction.type !== 'PAYOUT') throw new NotFoundException('Not a payout transaction');
+
+    // NOTE: this marks the payout as disbursed in the ledger. Actually
+    // sending the money (M-Pesa B2C to the vendor/rider's phone) is a
+    // separate step — see PaymentsService.initiateB2CPayout, which needs
+    // MPESA_INITIATOR_NAME / MPESA_SECURITY_CREDENTIAL configured first.
+    return this.prisma.transaction.update({
+      where: { id: transactionId },
+      data: { status: 'COMPLETED' },
+    });
+  }
 }

@@ -64,7 +64,22 @@ export class OrdersService {
       },
     });
 
-    // 6. Trigger the Daraja STK Push!
+    // 6. Log the charge in the ledger (PENDING until the M-Pesa callback
+    // confirms it — see the payments callback handler you'll need to add
+    // for CALLBACK_URL to actually flip this to COMPLETED).
+    await this.prisma.transaction.create({
+      data: {
+        order_id: order.id,
+        type: 'CHARGE',
+        party: 'PLATFORM',
+        party_id: vendor.id,
+        amount: total,
+        method: 'M-PESA',
+        status: 'PENDING',
+      },
+    });
+
+    // 7. Trigger the Daraja STK Push!
     try {
       await this.paymentsService.initiateStkPush(phone, total, order.id);
       console.log(`STK Push initiated successfully for order ${order.id}`);
