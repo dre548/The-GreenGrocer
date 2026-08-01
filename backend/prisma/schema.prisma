@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  CUSTOMER
+  VENDOR
+  RIDER
+  ADMIN
+}
+
+enum ApprovalStatus {
+  PENDING
+  ACTIVE    
+  REJECTED
+}
+
+enum OrderStatus {
+  PLACED
+  ACCEPTED_BY_VENDOR
+  READY_FOR_PICKUP
+  DELIVERED
+}
+
+model User {
+  id         String   @id @default(uuid())
+  phone      String   @unique
+  name       String
+  role       UserRole @default(CUSTOMER)
+  created_at DateTime @default(now())
+
+  vendorProfile Vendor?
+  riderProfile  Rider?
+  orders        Order[]
+}
+
+model Vendor {
+  id              String         @id @default(uuid())
+  user_id         String         @unique
+  business_name   String         
+  location        String?        
+  opening_hours   String?        // <-- RESTORED!
+  commission_rate Float?         
+  status          ApprovalStatus @default(PENDING) 
+
+  user            User           @relation(fields: [user_id], references: [id])
+  orders          Order[]
+}
+
+model Rider {
+  id            String         @id @default(uuid())
+  user_id       String         @unique
+  vehicle_type  String         
+  plate_number  String
+  id_front_url  String         
+  id_back_url   String
+  status        ApprovalStatus @default(PENDING) 
+
+  user          User           @relation(fields: [user_id], references: [id])
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  price       Int
+  emoji       String?  
+  unit        String
+  image_url   String?  
+  created_at  DateTime @default(now())
+}
+
+model Order {
+  id             String      @id @default(uuid())
+  customer_id    String
+  vendor_id      String
+  items          Json
+  subtotal       Int
+  delivery_fee   Int
+  total          Int
+  payment_method String
+  status         OrderStatus @default(PLACED)
+  created_at     DateTime    @default(now())
+
+  customer       User        @relation(fields: [customer_id], references: [id])
+  vendor         Vendor      @relation(fields: [vendor_id], references: [id])
+}
