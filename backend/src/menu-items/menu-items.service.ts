@@ -5,11 +5,17 @@ import { PrismaService } from '../prisma/prisma.service';
 export class MenuItemsService {
   constructor(private prisma: PrismaService) {}
 
-  async create(data: any) {
-    const { vendor_id, ...productData } = data; 
-    
+  async create(data: { vendor_id: string; name: string; price: number; emoji?: string; unit: string }) {
+    // Fixed: vendor_id was being destructured out and discarded, so every
+    // "menu item" landed in the global Product table with no owner at all.
     return this.prisma.product.create({
-      data: productData,
+      data: {
+        vendor_id: data.vendor_id,
+        name: data.name,
+        price: data.price,
+        emoji: data.emoji,
+        unit: data.unit,
+      },
     });
   }
 
@@ -19,11 +25,12 @@ export class MenuItemsService {
     });
   }
 
-  // --- THE MISSING FUNCTION ADDED BACK ---
+  // Fixed: this used to ignore vendorId entirely and return the whole
+  // global catalog for every vendor. Now it actually filters.
   async findByVendor(vendorId: string) {
-    // We return the global catalog so the Controller stays happy
     return this.prisma.product.findMany({
-      orderBy: { created_at: 'desc' }
+      where: { vendor_id: vendorId },
+      orderBy: { created_at: 'desc' },
     });
   }
 
@@ -33,6 +40,11 @@ export class MenuItemsService {
 
   async update(id: string, data: any) {
     return this.prisma.product.update({ where: { id }, data });
+  }
+
+  // Powers the "In Stock / Out of Stock" switch on the Menu Maker screen.
+  async setStock(id: string, inStock: boolean) {
+    return this.prisma.product.update({ where: { id }, data: { in_stock: inStock } });
   }
 
   async remove(id: string) {

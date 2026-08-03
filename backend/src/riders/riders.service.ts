@@ -39,4 +39,16 @@ export class RidersService {
 
     return { message: 'Payout requested — awaiting admin disbursement.', transaction };
   }
+
+  // Powers the rider-side "ratings" view (reused for feedback reporting).
+  async getRatings(riderId: string) {
+    const ratings = await this.prisma.rating.findMany({
+      where: { target: 'RIDER', target_id: riderId },
+      orderBy: { created_at: 'desc' },
+    });
+    const average = ratings.length
+      ? ratings.reduce((sum, r) => sum + r.score, 0) / ratings.length
+      : 0;
+    return { average, count: ratings.length, ratings };
+  }
 }

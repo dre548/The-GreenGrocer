@@ -17,4 +17,9 @@ export class RidersController {
     }
     return this.ridersService.requestPayout(id, body.amount, body.method);
   }
+
+  @Get(':id/ratings')
+  getRatings(@Param('id') id: string) {
+    return this.ridersService.getRatings(id);
+  }
 }

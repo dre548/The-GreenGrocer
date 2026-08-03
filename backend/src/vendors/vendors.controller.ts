@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param } from '@nestjs/common';
 import { VendorsService } from './vendors.service';
 
 @Controller('vendors')
@@ -29,5 +29,15 @@ export class VendorsController {
       return { error: 'Amount and method are required.' };
     }
     return this.vendorsService.requestPayout(id, body.amount, body.method);
+  }
+
+  @Patch(':id/status')
+  setOpenStatus(@Param('id') id: string, @Body() body: { is_open: boolean }) {
+    return this.vendorsService.setOpenStatus(id, body.is_open);
+  }
+
+  @Get(':id/ratings')
+  getRatings(@Param('id') id: string) {
+    return this.vendorsService.getRatings(id);
   }
 }

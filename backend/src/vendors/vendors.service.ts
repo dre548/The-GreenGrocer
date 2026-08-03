@@ -87,4 +87,25 @@ export class VendorsService {
 
     return { message: 'Payout requested — awaiting admin disbursement.', transaction };
   }
+
+  // Powers the "Online/Offline" switch on the Vendor dashboard.
+  async setOpenStatus(vendorId: string, isOpen: boolean) {
+    const vendor = await this.prisma.vendor.update({
+      where: { id: vendorId },
+      data: { is_open: isOpen },
+    });
+    return { is_open: vendor.is_open };
+  }
+
+  // Powers the "Customer & Delivery Feedback" report.
+  async getRatings(vendorId: string) {
+    const ratings = await this.prisma.rating.findMany({
+      where: { target: 'VENDOR', target_id: vendorId },
+      orderBy: { created_at: 'desc' },
+    });
+    const average = ratings.length
+      ? ratings.reduce((sum, r) => sum + r.score, 0) / ratings.length
+      : 0;
+    return { average, count: ratings.length, ratings };
+  }
 }

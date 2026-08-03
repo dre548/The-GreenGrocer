@@ -138,11 +138,55 @@ export class OrdersService {
   }
 
   // --- FUNCTION 6: GET AVAILABLE DELIVERIES (RIDER) ---
+  // Fixed: was filtering on ACCEPTED_BY_VENDOR, which just means the vendor
+  // confirmed the order — it might still be being prepared. A rider should
+  // only see orders the vendor has actually marked READY_FOR_PICKUP.
   async getAvailableDeliveries() {
     return this.prisma.order.findMany({
-      where: { status: 'ACCEPTED_BY_VENDOR' }, 
+      where: { status: 'READY_FOR_PICKUP', rider_id: null },
       orderBy: { created_at: 'asc' },
       include: { customer: true } 
+    });
+  }
+
+  // --- FUNCTION 7: CANCEL ORDER (vendor "Manage Order" -> Cancel) ---
+  async cancelOrder(orderId: string, reason: string) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new Error('Order not found');
+
+    const [updatedOrder] = await this.prisma.$transaction([
+      this.prisma.order.update({
+        where: { id: orderId },
+        data: { status: 'CANCELLED' },
+      }),
+      this.prisma.transaction.create({
+        data: {
+          order_id: orderId,
+          type: 'REFUND',
+          party: 'PLATFORM',
+          party_id: order.vendor_id,
+          amount: order.total,
+          method: order.payment_method,
+          status: 'PENDING', // an admin/ops process actually issues the M-Pesa reversal
+        },
+      }),
+    ]);
+
+    this.gateway.broadcastOrderStatus(orderId, 'CANCELLED');
+    return { message: `Order cancelled: ${reason}`, order: updatedOrder };
+  }
+
+  // --- FUNCTION 8: RATE ORDER (customer rates vendor or rider after delivery) ---
+  async rateOrder(orderId: string, target: 'VENDOR' | 'RIDER', score: number, comment?: string) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'DELIVERED') throw new Error('Can only rate a delivered order');
+
+    const targetId = target === 'VENDOR' ? order.vendor_id : order.rider_id;
+    if (!targetId) throw new Error(`Order has no ${target.toLowerCase()} to rate`);
+
+    return this.prisma.rating.create({
+      data: { order_id: orderId, target, target_id: targetId, score, comment },
     });
   }
 }

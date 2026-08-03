@@ -74,9 +74,11 @@ model Vendor {
   commission_rate Float?         
   status          ApprovalStatus @default(PENDING)
   wallet_balance  Float          @default(0)
+  is_open         Boolean        @default(true)
 
   user            User           @relation(fields: [user_id], references: [id])
   orders          Order[]
+  products        Product[]
 }
 
 model Rider {
@@ -95,12 +97,16 @@ model Rider {
 
 model Product {
   id          String   @id @default(uuid())
+  vendor_id   String?
   name        String
   price       Int
   emoji       String?  
   unit        String
   image_url   String?  
+  in_stock    Boolean  @default(true)
   created_at  DateTime @default(now())
+
+  vendor      Vendor?  @relation(fields: [vendor_id], references: [id])
 }
 
 model Order {

@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Environment secrets (Google Maps/Places/Geocoding keys, API base URL)
+.env

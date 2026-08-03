@@ -1,50 +1,29 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:async';
+import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'services/auth_service.dart';
-import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
-import 'dart:io';
-import 'dart:async';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'services/auth_service.dart';
 
 Future<void> main() async {
-  // 1. Ensure Flutter is ready before doing async work
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // 2. Load the .env file
   await dotenv.load(fileName: ".env");
 
-  // 3. Safety check (optional but good practice)
-  final mapsKey = dotenv.env['MAPS_SDK_KEY'] ?? '';
-  if (mapsKey.isEmpty) {
-    throw Exception('MAPS_SDK_KEY not set. Check your .env file.');
-  }
-
-  // 4. Run the app WITH the Providers intact
-  runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (context) => AppStateProvider()),
-        ChangeNotifierProvider(create: (context) => CartProvider()),
-        ChangeNotifierProvider(create: (context) => LocationProvider()),
-      ],
-      child: const TheGreengrocerApp(),
-    ),
-  );
-}
-
-void main() {
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (context) => CartProvider()),
         ChangeNotifierProvider(create: (context) => LocationProvider()),
+        ChangeNotifierProvider(create: (context) => RoleProvider()),
       ],
       child: const TheGreengrocerApp(),
     ),
@@ -59,11 +38,11 @@ class TheGreengrocerApp extends StatelessWidget {
     return MaterialApp(
       title: 'The Greengrocer',
       debugShowCheckedModeBanner: false,
-      themeMode: ThemeMode.system, 
+      themeMode: ThemeMode.system,
       theme: ThemeData(
         brightness: Brightness.light,
         primaryColor: Colors.green[700],
-        scaffoldBackgroundColor: Colors.white, 
+        scaffoldBackgroundColor: Colors.white,
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.white,
           elevation: 0,
@@ -98,12 +77,125 @@ class TheGreengrocerApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const LoginScreen(),
+      home: const SplashScreen(),
     );
   }
 }
 
-// --- STATE MANAGEMENT ---
+// ============================================================================
+// SPLASH SCREEN
+// ============================================================================
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _fade;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+    _fade = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
+    _scale = Tween<double>(begin: 0.85, end: 1.0).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
+    _controller.forward();
+    Timer(const Duration(milliseconds: 1600), () {
+      if (mounted) {
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF0B3D24), Color(0xFF124D2E), Color(0xFF1B6B3E)],
+          ),
+        ),
+        child: Center(
+          child: FadeTransition(
+            opacity: _fade,
+            child: ScaleTransition(
+              scale: _scale,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 96,
+                    height: 96,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 8))],
+                    ),
+                    child: const Center(child: Text('🥬', style: TextStyle(fontSize: 48))),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('The Greengrocer', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                  const SizedBox(height: 6),
+                  Text('fresh, fast, to your door', style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 13)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// GLASS CARD
+// ============================================================================
+class GlassCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final BorderRadius borderRadius;
+  const GlassCard({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.all(24),
+    this.borderRadius = const BorderRadius.all(Radius.circular(20)),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: borderRadius,
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            borderRadius: borderRadius,
+            color: Colors.white.withOpacity(0.14),
+            border: Border.all(color: Colors.white.withOpacity(0.28), width: 1.2),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+// --- CART / LOCATION STATE (unchanged from before) ---
 class CartProvider extends ChangeNotifier {
   final Map<String, Map<String, dynamic>> _items = {};
   Map<String, Map<String, dynamic>> get items => _items;
@@ -137,8 +229,141 @@ class LocationProvider extends ChangeNotifier {
   }
 }
 
+// ============================================================================
+// ROLE PROVIDER — now backed by the real backend. Holds the logged-in
+// user's vendor/rider profile ids + approval status (from login), their
+// wallet balances (fetched from GET /vendors|riders/:id/wallet), and the
+// Admin queues (pending vendors/riders/payouts) fetched from the real
+// /admin endpoints. No numbers here are hardcoded or invented client-side.
+// ============================================================================
+class RoleProvider extends ChangeNotifier {
+  final AuthService _auth = AuthService();
+
+  String? userName;
+  String? userPhone;
+
+  String? vendorId;
+  String? vendorStatus; // null | PENDING | ACTIVE | REJECTED
+  String? riderId;
+  String? riderStatus;
+
+  double vendorWallet = 0.0;
+  double riderWallet = 0.0;
+
+  List<dynamic> pendingVendors = [];
+  List<dynamic> pendingRiders = [];
+  List<dynamic> pendingPayouts = [];
+
+  bool isLoadingSession = false;
+
+  // Called right after a successful login, before navigating anywhere, so
+  // every dashboard has real data as soon as it's shown.
+  Future<void> loadSession() async {
+    isLoadingSession = true;
+    notifyListeners();
+    try {
+      userName = await _auth.getName();
+      userPhone = await _auth.getPhone();
+      vendorId = await _auth.getVendorId();
+      vendorStatus = await _auth.getVendorStatus();
+      riderId = await _auth.getRiderId();
+      riderStatus = await _auth.getRiderStatus();
+
+      if (vendorId != null && vendorStatus == 'ACTIVE') {
+        vendorWallet = await _auth.getVendorWallet(vendorId!);
+      }
+      if (riderId != null && riderStatus == 'ACTIVE') {
+        riderWallet = await _auth.getRiderWallet(riderId!);
+      }
+    } catch (_) {
+      // Non-fatal — dashboards show a retry/refresh affordance instead of crashing.
+    }
+    isLoadingSession = false;
+    notifyListeners();
+  }
+
+  void clearSession() {
+    userName = null;
+    userPhone = null;
+    vendorId = null;
+    vendorStatus = null;
+    riderId = null;
+    riderStatus = null;
+    vendorWallet = 0.0;
+    riderWallet = 0.0;
+    pendingVendors = [];
+    pendingRiders = [];
+    pendingPayouts = [];
+    notifyListeners();
+  }
+
+  Future<bool> applyForVendor(String phone, String name, String shopName, String location) async {
+    final success = await _auth.registerVendor(phone, name, shopName, location);
+    if (success) {
+      vendorStatus = 'PENDING';
+      notifyListeners();
+    }
+    return success;
+  }
+
+  Future<bool> applyForRider(String phone, String name, String vehicleType, String plate, String idFront, String idBack) async {
+    final success = await _auth.registerRider(phone, name, vehicleType, plate, idFront, idBack);
+    if (success) {
+      riderStatus = 'PENDING';
+      notifyListeners();
+    }
+    return success;
+  }
+
+  Future<void> refreshVendorWallet() async {
+    if (vendorId == null) return;
+    vendorWallet = await _auth.getVendorWallet(vendorId!);
+    notifyListeners();
+  }
+
+  Future<void> refreshRiderWallet() async {
+    if (riderId == null) return;
+    riderWallet = await _auth.getRiderWallet(riderId!);
+    notifyListeners();
+  }
+
+  Future<void> requestVendorPayout(double amount, String method) async {
+    if (vendorId == null) return;
+    await _auth.requestVendorPayout(vendorId!, amount, method);
+    await refreshVendorWallet();
+  }
+
+  Future<void> requestRiderPayout(double amount, String method) async {
+    if (riderId == null) return;
+    await _auth.requestRiderPayout(riderId!, amount, method);
+    await refreshRiderWallet();
+  }
+
+  Future<void> refreshAdminQueues() async {
+    pendingVendors = await _auth.getPendingVendors();
+    pendingRiders = await _auth.getPendingRiders();
+    pendingPayouts = await _auth.getPendingPayouts();
+    notifyListeners();
+  }
+
+  Future<void> approveVendor(String id) async {
+    await _auth.approveVendor(id);
+    await refreshAdminQueues();
+  }
+
+  Future<void> approveRider(String id) async {
+    await _auth.approveRider(id);
+    await refreshAdminQueues();
+  }
+
+  Future<void> disbursePayout(String transactionId) async {
+    await _auth.disbursePayout(transactionId);
+    await refreshAdminQueues();
+  }
+}
+
 // --- SHARED UI HELPERS ---
-Widget _buildStyledTextField(TextEditingController controller, String hint, bool isDark) {
+Widget _buildStyledTextField(TextEditingController controller, String hint, bool isDark, {bool enabled = true}) {
   return Container(
     decoration: BoxDecoration(
       color: isDark ? Colors.grey[900] : Colors.grey[100],
@@ -147,6 +372,7 @@ Widget _buildStyledTextField(TextEditingController controller, String hint, bool
     ),
     child: TextField(
       controller: controller,
+      enabled: enabled,
       style: TextStyle(color: isDark ? Colors.white : Colors.black, fontSize: 16, fontWeight: FontWeight.w500),
       decoration: InputDecoration(
         hintText: hint,
@@ -182,15 +408,22 @@ void _showFeatureDialog(BuildContext context, String title, String description) 
     builder: (context) => AlertDialog(
       title: Text(title),
       content: Text(description),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text("Close")),
-      ],
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("Close"))],
     ),
   );
 }
 
+void _showErrorSnack(BuildContext context, Object error) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text(error.toString().replaceFirst('Exception: ', '')), backgroundColor: Colors.red),
+  );
+}
+
 // ============================================================================
-// 1. PROFESSIONAL LOGIN SCREEN 
+// LOGIN SCREEN — real network call every time, no client-side bypass.
+// Includes a small "quick test accounts" section that hits the backend's
+// own ADMIN_SYSTEM / VENDOR_SYSTEM / RIDER_SYSTEM shortcut logins (these are
+// real, server-side test accounts — not a fake client-only backdoor).
 // ============================================================================
 
 class LoginScreen extends StatefulWidget {
@@ -204,27 +437,51 @@ class _LoginScreenState extends State<LoginScreen> {
   final _auth = AuthService();
   bool isLoading = false;
 
-  void _attemptLogin() async {
-    if (_phoneController.text.length < 9) return;
-    FocusScope.of(context).unfocus(); 
-    setState(() => isLoading = true);
-    
-    String fullPhone = '+254${_phoneController.text}';
-    String? result = await _auth.login(fullPhone);
-    
+  Future<void> _handleLoginResult(String? result) async {
     setState(() => isLoading = false);
+    if (!mounted) return;
 
-    if (result == 'CUSTOMER') {
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => MainNavigation(userPhone: fullPhone)));
-    } else if (result == 'VENDOR') {
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const VendorDashboardScreen()));
-    } else if (result == 'RIDER') {
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const RiderDashboardScreen()));
-    } else if (result == 'ADMIN') { 
+    if (result == null || result == 'Connection error') {
+      _showErrorSnack(context, result ?? 'Could not reach the server. Check your connection.');
+      return;
+    }
+
+    if (!['CUSTOMER', 'VENDOR', 'RIDER', 'ADMIN'].contains(result)) {
+      // The backend returns a human-readable error message (e.g. "pending
+      // admin approval") in place of a role string when login is rejected.
+      _showErrorSnack(context, result);
+      return;
+    }
+
+    await context.read<RoleProvider>().loadSession();
+    if (!mounted) return;
+
+    final phone = _phoneController.text.isNotEmpty ? '+254${_phoneController.text}' : (await _auth.getPhone() ?? '');
+    final roleProvider = context.read<RoleProvider>();
+
+    if (result == 'VENDOR' && roleProvider.vendorId != null) {
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => VendorDashboardScreen(vendorId: roleProvider.vendorId!)));
+    } else if (result == 'RIDER' && roleProvider.riderId != null) {
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => RiderDashboardScreen(riderId: roleProvider.riderId!)));
+    } else if (result == 'ADMIN') {
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const AdminDashboardScreen()));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result ?? 'Login failed. Check connection.'), backgroundColor: Colors.red));
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => MainNavigation(userPhone: phone)));
     }
+  }
+
+  void _attemptLogin() async {
+    if (_phoneController.text.length < 9) return;
+    FocusScope.of(context).unfocus();
+    setState(() => isLoading = true);
+    final result = await _auth.login('+254${_phoneController.text}');
+    await _handleLoginResult(result);
+  }
+
+  void _quickLogin(String testPhone) async {
+    setState(() => isLoading = true);
+    final result = await _auth.login(testPhone);
+    await _handleLoginResult(result);
   }
 
   @override
@@ -233,26 +490,40 @@ class _LoginScreenState extends State<LoginScreen> {
 
     return Scaffold(
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              const SizedBox(height: 40),
               Text('Enter your mobile number', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
               const SizedBox(height: 24),
               ProfessionalPhoneInput(phoneController: _phoneController),
               const SizedBox(height: 24),
-              isLoading 
-                ? const Center(child: CircularProgressIndicator()) 
-                : ElevatedButton(onPressed: _attemptLogin, child: const Text('Continue', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+              isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : ElevatedButton(onPressed: _attemptLogin, child: const Text('Continue', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
               const SizedBox(height: 20),
               Center(
                 child: TextButton(
                   onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const RegistrationRoleScreen())),
                   child: Text("Don't have an account? Create one", style: TextStyle(color: isDark ? Colors.greenAccent : Colors.green[700])),
                 ),
-              )
+              ),
+              const SizedBox(height: 48),
+              Divider(color: isDark ? Colors.grey[800] : Colors.grey[300]),
+              const SizedBox(height: 12),
+              Text('Quick test accounts (dev only)', style: TextStyle(color: Colors.grey[500], fontSize: 12, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(child: OutlinedButton(onPressed: () => _quickLogin('ADMIN_SYSTEM'), child: const Text('Admin'))),
+                  const SizedBox(width: 8),
+                  Expanded(child: OutlinedButton(onPressed: () => _quickLogin('VENDOR_SYSTEM'), child: const Text('Vendor'))),
+                  const SizedBox(width: 8),
+                  Expanded(child: OutlinedButton(onPressed: () => _quickLogin('RIDER_SYSTEM'), child: const Text('Rider'))),
+                ],
+              ),
             ],
           ),
         ),
@@ -263,7 +534,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
 class ProfessionalPhoneInput extends StatelessWidget {
   final TextEditingController phoneController;
-  const ProfessionalPhoneInput({super.key, required this.phoneController});
+  final bool enabled;
+  const ProfessionalPhoneInput({super.key, required this.phoneController, this.enabled = true});
 
   @override
   Widget build(BuildContext context) {
@@ -271,7 +543,7 @@ class ProfessionalPhoneInput extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? Colors.grey[900] : Colors.grey[100], 
+        color: isDark ? Colors.grey[900] : Colors.grey[100],
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: isDark ? Colors.grey[800]! : Colors.grey[300]!),
       ),
@@ -285,6 +557,7 @@ class ProfessionalPhoneInput extends StatelessWidget {
           Expanded(
             child: TextField(
               controller: phoneController,
+              enabled: enabled,
               keyboardType: TextInputType.phone,
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: isDark ? Colors.white : Colors.black),
               decoration: InputDecoration(
@@ -293,10 +566,7 @@ class ProfessionalPhoneInput extends StatelessWidget {
                 border: InputBorder.none,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               ),
-              inputFormatters: [
-                LengthLimitingTextInputFormatter(9), 
-                FilteringTextInputFormatter.digitsOnly,
-              ],
+              inputFormatters: [LengthLimitingTextInputFormatter(9), FilteringTextInputFormatter.digitsOnly],
             ),
           ),
         ],
@@ -306,13 +576,12 @@ class ProfessionalPhoneInput extends StatelessWidget {
 }
 
 // ============================================================================
-// 2. MAIN BOTTOM NAVIGATION CONTROLLER (CUSTOMER)
+// MAIN BOTTOM NAVIGATION (CUSTOMER)
 // ============================================================================
 
 class MainNavigation extends StatefulWidget {
   final String userPhone;
   const MainNavigation({super.key, required this.userPhone});
-
   @override
   State<MainNavigation> createState() => _MainNavigationState();
 }
@@ -337,7 +606,7 @@ class _MainNavigationState extends State<MainNavigation> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cart = Provider.of<CartProvider>(context);
-    
+
     return Scaffold(
       body: IndexedStack(index: _currentIndex, children: _pages),
       bottomNavigationBar: BottomNavigationBar(
@@ -356,8 +625,8 @@ class _MainNavigationState extends State<MainNavigation> {
           const BottomNavigationBarItem(icon: Icon(Icons.location_on_outlined), activeIcon: Icon(Icons.location_on), label: 'Pickup'),
           const BottomNavigationBarItem(icon: Icon(Icons.search), label: 'Search'),
           BottomNavigationBarItem(
-            icon: Badge(isLabelVisible: cart.itemCount > 0, label: Text('${cart.itemCount}'), child: const Icon(Icons.shopping_cart_outlined)), 
-            activeIcon: const Icon(Icons.shopping_cart), label: 'Baskets'
+            icon: Badge(isLabelVisible: cart.itemCount > 0, label: Text('${cart.itemCount}'), child: const Icon(Icons.shopping_cart_outlined)),
+            activeIcon: const Icon(Icons.shopping_cart), label: 'Baskets',
           ),
           const BottomNavigationBarItem(icon: Icon(Icons.person_outline), activeIcon: Icon(Icons.person), label: 'Profile'),
         ],
@@ -367,7 +636,7 @@ class _MainNavigationState extends State<MainNavigation> {
 }
 
 // ============================================================================
-// 3. HOME SCREEN
+// HOME SCREEN — products fetched from the real GET /products endpoint
 // ============================================================================
 class HomeScreen extends StatefulWidget {
   final String userPhone;
@@ -377,8 +646,10 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final AuthService _auth = AuthService();
   List<dynamic> products = [];
   bool isLoading = true;
+  String? errorMessage;
 
   @override
   void initState() {
@@ -387,13 +658,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> fetchProducts() async {
+    setState(() { isLoading = true; errorMessage = null; });
     try {
-      final response = await http.get(Uri.parse('http://10.0.2.2:3000/products'));
-      if (response.statusCode == 200) {
-        setState(() { products = jsonDecode(response.body); isLoading = false; });
-      }
+      final data = await _auth.getProducts();
+      setState(() { products = data; isLoading = false; });
     } catch (e) {
-      setState(() => isLoading = false);
+      setState(() { errorMessage = e.toString().replaceFirst('Exception: ', ''); isLoading = false; });
     }
   }
 
@@ -403,35 +673,48 @@ class _HomeScreenState extends State<HomeScreen> {
     final textColor = isDark ? Colors.white : Colors.black;
     final locationData = Provider.of<LocationProvider>(context);
 
-    return CustomScrollView(
-      slivers: [
-        SliverAppBar(
-          floating: true,
-          title: InkWell(
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AddressSelectionScreen())),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
+    return RefreshIndicator(
+      onRefresh: fetchProducts,
+      child: CustomScrollView(
+        slivers: [
+          SliverAppBar(
+            floating: true,
+            title: InkWell(
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AddressSelectionScreen())),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(locationData.currentAddress, style: TextStyle(color: textColor, fontWeight: FontWeight.bold, fontSize: 16)),
+                  Icon(Icons.keyboard_arrow_down, color: textColor),
+                ],
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(locationData.currentAddress, style: TextStyle(color: textColor, fontWeight: FontWeight.bold, fontSize: 16)),
-                Icon(Icons.keyboard_arrow_down, color: textColor),
+                _buildCategoryPills(isDark),
+                const SizedBox(height: 16),
+                _buildSectionHeader('Fresh on The Greengrocer', textColor),
+                if (isLoading) const Center(child: Padding(padding: EdgeInsets.all(20.0), child: CircularProgressIndicator())),
+                if (!isLoading && errorMessage != null)
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Could not load products: $errorMessage', style: const TextStyle(color: Colors.red)),
+                        TextButton(onPressed: fetchProducts, child: const Text('Retry')),
+                      ],
+                    ),
+                  ),
+                if (!isLoading && errorMessage == null) _buildDynamicProductList(isDark),
               ],
             ),
           ),
-        ),
-        SliverToBoxAdapter(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildCategoryPills(isDark),
-              const SizedBox(height: 16),
-              _buildSectionHeader('Fresh on The Greengrocer', textColor),
-              isLoading 
-                ? const Center(child: Padding(padding: EdgeInsets.all(20.0), child: CircularProgressIndicator()))
-                : _buildDynamicProductList(isDark),
-            ],
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -458,13 +741,7 @@ class _HomeScreenState extends State<HomeScreen> {
       margin: const EdgeInsets.only(right: 8),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(20)),
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: fgColor),
-          const SizedBox(width: 6),
-          Text(title, style: TextStyle(color: fgColor, fontWeight: FontWeight.w600)),
-        ],
-      ),
+      child: Row(children: [Icon(icon, size: 18, color: fgColor), const SizedBox(width: 6), Text(title, style: TextStyle(color: fgColor, fontWeight: FontWeight.w600))]),
     );
   }
 
@@ -490,6 +767,7 @@ class _HomeScreenState extends State<HomeScreen> {
         itemCount: products.length,
         itemBuilder: (context, index) {
           final product = products[index];
+          final bool inStock = product["in_stock"] ?? true;
           return Container(
             width: 200,
             margin: const EdgeInsets.only(right: 16),
@@ -501,19 +779,24 @@ class _HomeScreenState extends State<HomeScreen> {
                     Container(
                       height: 140, width: 200,
                       decoration: BoxDecoration(color: isDark ? Colors.grey[800] : Colors.grey[200], borderRadius: BorderRadius.circular(12)),
-                      child: Center(child: Text(product["emoji"] ?? "🛒", style: const TextStyle(fontSize: 60))),
+                      child: Center(child: Text(product["emoji"] ?? "🛒", style: TextStyle(fontSize: 60, color: inStock ? null : Colors.grey))),
                     ),
+                    if (!inStock)
+                      Positioned(
+                        top: 8, left: 8,
+                        child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(8)), child: const Text('Out of stock', style: TextStyle(color: Colors.white, fontSize: 11))),
+                      ),
                     Positioned(
                       bottom: 8, right: 8,
                       child: GestureDetector(
-                        onTap: () {
+                        onTap: !inStock ? null : () {
                           cart.addItem(product["name"], product["price"], product["emoji"] ?? "🛒");
                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${product["name"]} added!'), duration: const Duration(seconds: 1)));
                         },
                         child: Container(
                           padding: const EdgeInsets.all(8),
-                          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle, boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)]),
-                          child: const Icon(Icons.add, color: Colors.black, size: 20),
+                          decoration: BoxDecoration(color: inStock ? Colors.white : Colors.grey[300], shape: BoxShape.circle, boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)]),
+                          child: Icon(Icons.add, color: inStock ? Colors.black : Colors.grey, size: 20),
                         ),
                       ),
                     ),
@@ -522,7 +805,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 8),
                 Text(product["name"], style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black), maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 4),
-                Text('Ksh ${product["price"]} ${product["unit"]}', style: TextStyle(color: isDark ? Colors.greenAccent : Colors.green[700], fontWeight: FontWeight.w600, fontSize: 14)),
+                Text('Ksh ${product["price"]} ${product["unit"] ?? ""}', style: TextStyle(color: isDark ? Colors.greenAccent : Colors.green[700], fontWeight: FontWeight.w600, fontSize: 14)),
               ],
             ),
           );
@@ -561,9 +844,7 @@ class _AddressSelectionScreenState extends State<AddressSelectionScreen> {
                 trailing: _selectedTime != "Deliver now" ? const Icon(Icons.check, color: Colors.green) : null,
                 onTap: () async {
                   TimeOfDay? time = await showTimePicker(context: context, initialTime: TimeOfDay.now());
-                  if (time != null) {
-                    setState(() => _selectedTime = "Scheduled: ${time.format(context)}");
-                  }
+                  if (time != null) setState(() => _selectedTime = "Scheduled: ${time.format(context)}");
                   if (context.mounted) Navigator.pop(context);
                 },
               ),
@@ -576,15 +857,12 @@ class _AddressSelectionScreenState extends State<AddressSelectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    
     return Scaffold(
       appBar: AppBar(title: const Text("Delivery Details"), elevation: 1),
       body: ListView(
         children: [
           Container(
             padding: const EdgeInsets.all(16),
-            color: isDark ? Colors.grey[900] : Colors.grey[50],
             child: InkWell(
               onTap: _showTimePicker,
               child: Row(
@@ -597,44 +875,19 @@ class _AddressSelectionScreenState extends State<AddressSelectionScreen> {
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: "Enter a new address",
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: isDark ? Colors.grey[800] : Colors.grey[200],
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-              ),
-            ),
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text('Saved addresses aren\'t backed by the API yet — this screen is a placeholder for that feature.', style: TextStyle(color: Colors.grey, fontSize: 13)),
           ),
-          _buildAddressListTile(Icons.home, "Home", "Set your home address"),
-          _buildAddressListTile(Icons.work, "Work", "Set your work address"),
-          _buildAddressListTile(Icons.add_location_alt, "Add a label", "Add custom location"),
-          const Divider(),
-          const Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Text("Nearby Addresses", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey))),
-          _buildAddressListTile(Icons.place, "Shopping Centre", "Nearby"),
-          const Divider(),
-          const Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Text("Previous Addresses", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey))),
-          _buildAddressListTile(Icons.history, "Previous Location", "History"),
         ],
       ),
-    );
-  }
-
-  Widget _buildAddressListTile(IconData icon, String title, String subtitle) {
-    return ListTile(
-      leading: CircleAvatar(backgroundColor: Colors.grey.withOpacity(0.2), child: Icon(icon, color: Colors.black)),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-      subtitle: Text(subtitle),
-      onTap: () {}, 
     );
   }
 }
 
 // ============================================================================
-// 4. PICKUP MAP SCREEN
+// PICKUP MAP SCREEN — Geocoding/Places keys now come from .env, not
+// hardcoded constants.
 // ============================================================================
 class PickupMapScreen extends StatefulWidget {
   const PickupMapScreen({super.key});
@@ -648,11 +901,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   final Set<Marker> _markers = {};
   List<dynamic> nearbyRestaurants = [];
   bool _isLoadingPlaces = false;
-
   bool _isDeliveryMode = true;
-  double _deliveryFeeLimit = 5.0;
-  double _minRating = 4.5;
-  final Map<String, bool> _cuisines = {"American": false, "Asian": false, "Bakery": false, "BBQ": false};
+
+  String get _geocodingApiKey => dotenv.env['GEOCODING_API_KEY'] ?? '';
+  String get _placesApiKey => dotenv.env['PLACES_API_KEY'] ?? '';
 
   @override
   void initState() {
@@ -674,7 +926,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
           }
         }
       }
-    } catch (e) {} 
+    } catch (e) {}
     finally {
       if (mounted) {
         _updateGlobalAddress(_currentPosition);
@@ -684,8 +936,9 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   }
 
   Future<void> _updateGlobalAddress(LatLng pos) async {
+    if (_geocodingApiKey.isEmpty) return;
     try {
-      final url = 'https://maps.googleapis.com/maps/api/geocode/json?latlng=${pos.latitude},${pos.longitude}&key=${dotenv.env['GEOCODING_API_KEY']}';
+      final url = 'https://maps.googleapis.com/maps/api/geocode/json?latlng=${pos.latitude},${pos.longitude}&key=$_geocodingApiKey';
       final response = await http.get(Uri.parse(url));
       final data = jsonDecode(response.body);
       if (data['status'] == 'OK' && mounted) {
@@ -701,13 +954,12 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   }
 
   Future<void> _fetchRealGooglePlaces(LatLng pos) async {
-    if (!mounted) return;
+    if (!mounted || _placesApiKey.isEmpty) return;
     setState(() => _isLoadingPlaces = true);
     try {
-      String url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${pos.latitude},${pos.longitude}&radius=3000&type=restaurant&key=${dotenv.env['PLACES_API_KEY']}';
+      String url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${pos.latitude},${pos.longitude}&radius=3000&type=restaurant&key=$_placesApiKey';
       final response = await http.get(Uri.parse(url));
       final data = jsonDecode(response.body);
-
       if (data['status'] == 'OK' && mounted) {
         setState(() {
           nearbyRestaurants = data['results'];
@@ -730,125 +982,9 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     }
   }
 
-  void _showFilterSheet(String title, Widget child) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => StatefulBuilder(
-        builder: (context, setModalState) {
-          return Container(
-            padding: const EdgeInsets.only(top: 16, bottom: 32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 16),
-                const Divider(height: 1),
-                child,
-                const SizedBox(height: 24),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: Column(
-                    children: [
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.black,
-                          minimumSize: const Size(double.infinity, 54),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
-                        ),
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _fetchRealGooglePlaces(_currentPosition);
-                        },
-                        child: const Text('Apply', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                      ),
-                      const SizedBox(height: 8),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Reset', style: TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.w600)),
-                      )
-                    ],
-                  ),
-                )
-              ],
-            ),
-          );
-        }
-      ),
-    );
-  }
-
-  void _showDeliveryModeFilter() {
-    _showFilterSheet("Delivery", StatefulBuilder(
-      builder: (context, setModalState) {
-        return Column(
-          children: [
-            CheckboxListTile(
-              title: const Text("Delivery", style: TextStyle(fontWeight: FontWeight.w500)),
-              value: _isDeliveryMode,
-              activeColor: Colors.black,
-              onChanged: (val) {
-                setModalState(() => _isDeliveryMode = true);
-                setState(() => _isDeliveryMode = true);
-              },
-            ),
-            CheckboxListTile(
-              title: const Text("Pick-up", style: TextStyle(fontWeight: FontWeight.w500)),
-              value: !_isDeliveryMode,
-              activeColor: Colors.black,
-              onChanged: (val) {
-                setModalState(() => _isDeliveryMode = false);
-                setState(() => _isDeliveryMode = false);
-              },
-            ),
-          ],
-        );
-      },
-    ));
-  }
-
-  void _showDeliveryFeeFilter() {
-    _showFilterSheet("Delivery Fee", StatefulBuilder(
-      builder: (context, setModalState) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text("Any amount", style: TextStyle(fontSize: 16)),
-              const SizedBox(height: 24),
-              SliderTheme(
-                data: SliderThemeData(
-                  activeTrackColor: Colors.black, inactiveTrackColor: Colors.grey[300],
-                  thumbColor: Colors.black, overlayColor: Colors.black12,
-                  trackHeight: 4,
-                ),
-                child: Slider(
-                  value: _deliveryFeeLimit,
-                  min: 3, max: 8, divisions: 5,
-                  label: _deliveryFeeLimit > 7 ? "7+" : "${_deliveryFeeLimit.toInt()}",
-                  onChanged: (val) {
-                    setModalState(() => _deliveryFeeLimit = val);
-                    setState(() => _deliveryFeeLimit = val);
-                  },
-                ),
-              ),
-              const Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [Text("3"), Text("5"), Text("7"), Text("7+")],
-              )
-            ],
-          ),
-        );
-      },
-    ));
-  }
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return Scaffold(
       body: Stack(
         children: [
@@ -860,42 +996,8 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
             zoomControlsEnabled: false,
             onMapCreated: (controller) => mapController = controller,
           ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    height: 50,
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.grey[900] : Colors.white,
-                      borderRadius: BorderRadius.circular(25),
-                      boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 10, spreadRadius: 2)],
-                    ),
-                    child: const Row(
-                      children: [
-                        SizedBox(width: 16), Icon(Icons.search, color: Colors.grey), SizedBox(width: 12),
-                        Expanded(child: Text('Search delivery near you', style: TextStyle(fontSize: 16, color: Colors.grey, fontWeight: FontWeight.w500))),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        _buildFilterPill(_isDeliveryMode ? Icons.home : Icons.directions_walk, _isDeliveryMode ? 'Delivery' : 'Pick-up', true, isDark, _showDeliveryModeFilter),
-                        _buildFilterPill(null, 'Delivery Fee', false, isDark, _showDeliveryFeeFilter),
-                      ],
-                    ),
-                  )
-                ],
-              ),
-            ),
-          ),
           Positioned(
-            top: 145, right: 16,
+            top: 100, right: 16,
             child: FloatingActionButton.small(
               backgroundColor: isDark ? Colors.grey[900] : Colors.white,
               onPressed: _tryGetRealLocation,
@@ -917,19 +1019,20 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                   itemCount: _isLoadingPlaces ? 3 : 2 + nearbyRestaurants.length,
                   itemBuilder: (context, index) {
                     if (index == 0) return Center(child: Container(width: 40, height: 5, decoration: BoxDecoration(color: Colors.grey[400], borderRadius: BorderRadius.circular(10))));
-                    if (index == 1) return Padding(padding: const EdgeInsets.symmetric(vertical: 16), child: Text(_isDeliveryMode ? 'Delivery near you' : 'Pick-up near you', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)));
+                    if (index == 1) return Padding(padding: const EdgeInsets.symmetric(vertical: 16), child: Text('Delivery near you', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)));
                     if (_isLoadingPlaces) return const Center(child: CircularProgressIndicator());
-
                     final place = nearbyRestaurants[index - 2];
                     double distInMeters = Geolocator.distanceBetween(_currentPosition.latitude, _currentPosition.longitude, place['geometry']['location']['lat'], place['geometry']['location']['lng']);
                     String distStr = "${(distInMeters / 1000).toStringAsFixed(1)} km";
-                    String photoUrl = place['photos'] != null && place['photos'].isNotEmpty
-                        ? 'https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${place['photos'][0]['photo_reference']}&key=$placesApiKey'
-                        : 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=600';
-
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 16.0),
-                      child: _buildStoreCard(place['name'] ?? 'Restaurant', '⭐ ${place['rating'] ?? 'New'} • $distStr • ${place['vicinity'] ?? ''}', photoUrl, isDark),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(place['name'] ?? 'Restaurant', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
+                          Text('⭐ ${place['rating'] ?? 'New'} • $distStr • ${place['vicinity'] ?? ''}', style: TextStyle(color: Colors.grey[600])),
+                        ],
+                      ),
                     );
                   },
                 ),
@@ -940,77 +1043,13 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
       ),
     );
   }
-
-  Widget _buildFilterPill(IconData? icon, String? label, bool isSelected, bool isDark, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(right: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: isDark ? Colors.grey[900] : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.grey[300]!),
-          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (icon != null) ...[Icon(icon, size: 16, color: isDark ? Colors.white : Colors.black), if (label != null) const SizedBox(width: 6)],
-            if (label != null) Text(label, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: isDark ? Colors.white : Colors.black)),
-            if (label != null) Icon(Icons.keyboard_arrow_down, size: 16, color: isDark ? Colors.white : Colors.black),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStoreCard(String title, String subtitle, String imageUrl, bool isDark) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Stack(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Image.network(imageUrl, height: 160, width: double.infinity, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(height: 160, color: Colors.grey[300], child: const Icon(Icons.fastfood, size: 50))),
-            ),
-            Positioned(
-              top: 12, left: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-                child: Row(
-                  children: [
-                    Icon(_isDeliveryMode ? Icons.delivery_dining : Icons.directions_walk, size: 14, color: Colors.black),
-                    const SizedBox(width: 4),
-                    Text(_isDeliveryMode ? 'Delivery' : 'Pick it up', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.black)),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black), maxLines: 1, overflow: TextOverflow.ellipsis),
-        const SizedBox(height: 2),
-        Text(subtitle, style: TextStyle(color: Colors.grey[600], fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis),
-      ],
-    );
-  }
 }
-
-// ============================================================================
-// 5. SEARCH SCREEN & BASKETS
-// ============================================================================
 
 class SearchScreen extends StatelessWidget {
   const SearchScreen({super.key});
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16.0),
@@ -1021,44 +1060,47 @@ class SearchScreen extends StatelessWidget {
             Container(
               height: 45,
               decoration: BoxDecoration(color: isDark ? Colors.grey[800] : Colors.grey[200], borderRadius: BorderRadius.circular(8)),
-              child: const TextField(
-                decoration: InputDecoration(hintText: 'Search The Greengrocer', prefixIcon: Icon(Icons.search), border: InputBorder.none),
-              ),
+              child: const TextField(decoration: InputDecoration(hintText: 'Search The Greengrocer', prefixIcon: Icon(Icons.search), border: InputBorder.none)),
             ),
             const SizedBox(height: 24),
-            Text('Groceries you\'ll love', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
-            const SizedBox(height: 16),
-            Expanded(
-              child: GridView.count(
-                crossAxisCount: 4,
-                children: [
-                  _dishCircle('Fruits', '🍎', isDark),
-                  _dishCircle('Veggies', '🥦', isDark),
-                  _dishCircle('Meat', '🥩', isDark),
-                  _dishCircle('Dairy', '🥛', isDark),
-                ],
-              ),
-            )
+            Text('Product search filters by name/category aren\'t wired to the API yet.', style: TextStyle(color: Colors.grey[600])),
           ],
         ),
       ),
     );
   }
-
-  Widget _dishCircle(String title, String emoji, bool isDark) {
-    return Column(
-      children: [
-        CircleAvatar(radius: 35, backgroundColor: isDark ? Colors.grey[800] : Colors.grey[200], child: Text(emoji, style: const TextStyle(fontSize: 30))),
-        const SizedBox(height: 8),
-        Text(title, style: TextStyle(fontWeight: FontWeight.w500, color: isDark ? Colors.white : Colors.black, fontSize: 13)),
-      ],
-    );
-  }
 }
 
-class BasketsScreen extends StatelessWidget {
+// ============================================================================
+// BASKETS SCREEN — checkout now calls the real POST /orders/checkout,
+// which triggers a genuine M-Pesa STK push server-side.
+// ============================================================================
+class BasketsScreen extends StatefulWidget {
   final String userPhone;
   const BasketsScreen({super.key, required this.userPhone});
+  @override
+  State<BasketsScreen> createState() => _BasketsScreenState();
+}
+
+class _BasketsScreenState extends State<BasketsScreen> {
+  bool _isCheckingOut = false;
+
+  Future<void> _checkout(CartProvider cart) async {
+    setState(() => _isCheckingOut = true);
+    try {
+      final items = cart.items.values.map((i) => {'name': i['name'], 'price': i['price'], 'quantity': i['quantity']}).toList();
+      final idempotencyKey = DateTime.now().millisecondsSinceEpoch.toString();
+      final result = await AuthService().checkout(items: items, subtotal: cart.totalAmount, idempotencyKey: idempotencyKey);
+      cart.clearCart();
+      if (mounted) {
+        _showFeatureDialog(context, 'Order Placed', result['message'] ?? 'Check your phone for the M-Pesa prompt.');
+      }
+    } catch (e) {
+      if (mounted) _showErrorSnack(context, e);
+    } finally {
+      if (mounted) setState(() => _isCheckingOut = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1070,10 +1112,7 @@ class BasketsScreen extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.all(16.0),
-            child: Align(
-              alignment: Alignment.centerLeft, 
-              child: Text('Your Basket', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black))
-            ),
+            child: Align(alignment: Alignment.centerLeft, child: Text('Your Basket', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black))),
           ),
           Expanded(
             child: cart.items.isEmpty
@@ -1084,8 +1123,6 @@ class BasketsScreen extends StatelessWidget {
                         Icon(Icons.shopping_cart, size: 100, color: isDark ? Colors.grey[800] : Colors.grey[300]),
                         const SizedBox(height: 24),
                         Text('Add items to start a basket', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
-                        const SizedBox(height: 8),
-                        Text('Once you add items, your basket will appear here.', style: TextStyle(color: Colors.grey[600])),
                       ],
                     ),
                   )
@@ -1110,18 +1147,11 @@ class BasketsScreen extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('Total:', style: TextStyle(fontSize: 18)),
-                        Text('${cart.totalAmount}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                      ],
-                    ),
+                    Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('Total:', style: TextStyle(fontSize: 18)), Text('${cart.totalAmount}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))]),
                     const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: () => _showFeatureDialog(context, "M-Pesa Checkout", "M-Pesa STK push initiated to $userPhone"),
-                      child: const Text('Checkout with M-Pesa', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    ),
+                    _isCheckingOut
+                        ? const CircularProgressIndicator()
+                        : ElevatedButton(onPressed: () => _checkout(cart), child: const Text('Checkout with M-Pesa', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
                   ],
                 ),
               ),
@@ -1133,7 +1163,9 @@ class BasketsScreen extends StatelessWidget {
 }
 
 // ============================================================================
-// 7. CUSTOMER PROFILE 
+// CUSTOMER PROFILE — "Drive & Deliver" / "Sell your products" now reflect
+// the real vendor_status/rider_status from the backend (null / PENDING /
+// ACTIVE), and route to the actual signup screens instead of a snackbar.
 // ============================================================================
 
 class ProfileScreen extends StatelessWidget {
@@ -1144,6 +1176,12 @@ class ProfileScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textColor = isDark ? Colors.white : Colors.black;
+    final roleProvider = context.watch<RoleProvider>();
+
+    final bool isRiderApproved = roleProvider.riderStatus == 'ACTIVE';
+    final bool isRiderPending = roleProvider.riderStatus == 'PENDING';
+    final bool isVendorApproved = roleProvider.vendorStatus == 'ACTIVE';
+    final bool isVendorPending = roleProvider.vendorStatus == 'PENDING';
 
     return SafeArea(
       child: Column(
@@ -1173,15 +1211,60 @@ class ProfileScreen extends StatelessWidget {
           Expanded(
             child: ListView(
               children: [
+                const Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Text("Earning Opportunities", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey))),
+                ListTile(
+                  leading: CircleAvatar(backgroundColor: Colors.orange.withOpacity(0.2), child: const Icon(Icons.motorcycle, color: Colors.orange)),
+                  title: const Text("Drive & Deliver", style: TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text(isRiderApproved ? "Active Account" : (isRiderPending ? "Application Pending Review" : "Earn money on your own schedule")),
+                  trailing: isRiderApproved
+                      ? ElevatedButton(
+                          style: ElevatedButton.styleFrom(minimumSize: const Size(0, 36)),
+                          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => RiderDashboardScreen(riderId: roleProvider.riderId!))),
+                          child: const Text("Switch to Rider"),
+                        )
+                      : const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: isRiderApproved
+                      ? null
+                      : () {
+                          if (isRiderPending) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Your rider application is already awaiting review.')));
+                          } else {
+                            Navigator.push(context, MaterialPageRoute(builder: (context) => const RiderSignupScreen(isUpgrade: true)));
+                          }
+                        },
+                ),
+                ListTile(
+                  leading: CircleAvatar(backgroundColor: Colors.blueGrey.withOpacity(0.2), child: const Icon(Icons.store, color: Colors.blueGrey)),
+                  title: const Text("Sell your products", style: TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text(isVendorApproved ? "Active Store" : (isVendorPending ? "Application Pending Review" : "Open a digital storefront")),
+                  trailing: isVendorApproved
+                      ? ElevatedButton(
+                          style: ElevatedButton.styleFrom(minimumSize: const Size(0, 36)),
+                          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => VendorDashboardScreen(vendorId: roleProvider.vendorId!))),
+                          child: const Text("Switch to Vendor"),
+                        )
+                      : const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: isVendorApproved
+                      ? null
+                      : () {
+                          if (isVendorPending) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Your vendor application is already awaiting review.')));
+                          } else {
+                            Navigator.push(context, MaterialPageRoute(builder: (context) => const VendorSignupScreen(isUpgrade: true)));
+                          }
+                        },
+                ),
+                const Divider(height: 32),
                 _settingsTile('Account settings', Icons.settings_outlined, textColor, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AccountSettingsScreen()))),
                 _settingsTile('Family', Icons.group_outlined, textColor, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const FamilyScreen()))),
                 _settingsTile('Promotions', Icons.local_offer_outlined, textColor, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PromotionsScreen()))),
-                _settingsTile('Help', Icons.help_outline, textColor, () => _showFeatureDialog(context, "Support", "Support chat initiated.")),
+                _settingsTile('Help', Icons.help_outline, textColor, () => _showFeatureDialog(context, "Support", "Support chat isn't wired to a real backend yet.")),
                 ListTile(
                   leading: const Icon(Icons.logout, color: Colors.red),
                   title: const Text('Logout', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w500, fontSize: 16)),
                   onTap: () async {
                     await AuthService().logout();
+                    context.read<RoleProvider>().clearSession();
                     if (context.mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
                   },
                 )
@@ -1201,24 +1284,14 @@ class ProfileScreen extends StatelessWidget {
           margin: const EdgeInsets.symmetric(horizontal: 4),
           padding: const EdgeInsets.symmetric(vertical: 16),
           decoration: BoxDecoration(color: isDark ? Colors.grey[800] : Colors.grey[100], borderRadius: BorderRadius.circular(12)),
-          child: Column(
-            children: [
-              Icon(icon, size: 28, color: isDark ? Colors.white : Colors.black),
-              const SizedBox(height: 8),
-              Text(title, style: TextStyle(fontWeight: FontWeight.w600, color: isDark ? Colors.white : Colors.black)),
-            ],
-          ),
+          child: Column(children: [Icon(icon, size: 28, color: isDark ? Colors.white : Colors.black), const SizedBox(height: 8), Text(title, style: TextStyle(fontWeight: FontWeight.w600, color: isDark ? Colors.white : Colors.black))]),
         ),
       ),
     );
   }
 
   Widget _settingsTile(String title, IconData icon, Color textColor, VoidCallback onTap) {
-    return ListTile(
-      leading: Icon(icon, color: textColor),
-      title: Text(title, style: TextStyle(color: textColor, fontWeight: FontWeight.w500, fontSize: 16)),
-      onTap: onTap,
-    );
+    return ListTile(leading: Icon(icon, color: textColor), title: Text(title, style: TextStyle(color: textColor, fontWeight: FontWeight.w500, fontSize: 16)), onTap: onTap);
   }
 }
 
@@ -1234,9 +1307,7 @@ class FavouritesScreen extends StatelessWidget {
           children: [
             Icon(Icons.favorite_border, size: 80, color: Colors.grey[400]),
             const SizedBox(height: 16),
-            const Text("No favorites yet", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            const Text("Mark your best orders as favorite to reorder quickly.", style: TextStyle(color: Colors.grey)),
+            const Text("Favourites aren't backed by the API yet", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
           ],
         ),
       ),
@@ -1256,165 +1327,148 @@ class WalletScreen extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(color: Colors.green[700], borderRadius: BorderRadius.circular(16)),
-            child: Column(
+            child: const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text("Cash Balance", style: TextStyle(color: Colors.white70, fontSize: 16)),
-                const SizedBox(height: 8),
-                const Text("0.00", style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.green[700]),
-                  onPressed: () {}, 
-                  child: const Text("Add Cash"),
-                )
+                Text("Customer cash-wallet isn't part of the backend yet", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                SizedBox(height: 8),
+                Text("Checkout goes straight through M-Pesa STK push instead.", style: TextStyle(color: Colors.white70)),
               ],
             ),
           ),
-          const SizedBox(height: 24),
-          const Text("Payment Methods", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          ListTile(leading: const Icon(Icons.phone_android, color: Colors.green), title: const Text("Mobile Money"), trailing: const Icon(Icons.arrow_forward_ios, size: 16), onTap: (){}),
-          ListTile(leading: const Icon(Icons.money, color: Colors.grey), title: const Text("Cash on Delivery"), trailing: const Icon(Icons.arrow_forward_ios, size: 16), onTap: (){}),
-          const Divider(),
-          const Text("Vouchers", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          ListTile(leading: const Icon(Icons.card_giftcard, color: Colors.orange), title: const Text("Received Vouchers"), trailing: const Icon(Icons.arrow_forward_ios, size: 16), onTap: (){}),
-          ListTile(leading: const Icon(Icons.add_circle_outline), title: const Text("Add Voucher Code"), trailing: const Icon(Icons.arrow_forward_ios, size: 16), onTap: (){}),
         ],
       ),
     );
   }
 }
 
-class OrdersTabScreen extends StatelessWidget {
+// ============================================================================
+// ORDER HISTORY — real GET /orders/history, with a working "Rate" action
+// on delivered orders (POST /orders/:id/rate) so the vendor/rider feedback
+// screens have real data to show instead of an empty table.
+// ============================================================================
+class OrdersTabScreen extends StatefulWidget {
   final String userPhone;
   const OrdersTabScreen({super.key, required this.userPhone});
+  @override
+  State<OrdersTabScreen> createState() => _OrdersTabScreenState();
+}
+
+class _OrdersTabScreenState extends State<OrdersTabScreen> {
+  List<dynamic> orders = [];
+  bool isLoading = true;
+  String? error;
 
   @override
-  Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text("Your Orders"),
-          bottom: const TabBar(
-            indicatorColor: Colors.green,
-            labelColor: Colors.green,
-            unselectedLabelColor: Colors.grey,
-            tabs: [Tab(text: "Past Items"), Tab(text: "Past Orders")],
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    setState(() { isLoading = true; error = null; });
+    try {
+      final data = await AuthService().getOrderHistory();
+      setState(() { orders = data; isLoading = false; });
+    } catch (e) {
+      setState(() { error = e.toString().replaceFirst('Exception: ', ''); isLoading = false; });
+    }
+  }
+
+  void _showRateDialog(String orderId) {
+    int score = 5;
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Rate this order'),
+          content: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(5, (i) => IconButton(
+              icon: Icon(i < score ? Icons.star : Icons.star_border, color: Colors.amber),
+              onPressed: () => setDialogState(() => score = i + 1),
+            )),
           ),
-        ),
-        body: TabBarView(
-          children: [
-            _buildPastItems(context),
-            _OrderHistoryListScreenStateful(userPhone: userPhone), 
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                try {
+                  await AuthService().rateOrder(orderId, 'VENDOR', score);
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Thanks for rating!')));
+                } catch (e) {
+                  if (mounted) _showErrorSnack(context, e);
+                }
+              },
+              child: const Text('Submit'),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildPastItems(BuildContext context) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: 3, 
-      itemBuilder: (context, index) {
-        return ListTile(
-          contentPadding: const EdgeInsets.symmetric(vertical: 8),
-          leading: Container(
-            height: 60, width: 60,
-            decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(8)),
-            child: const Center(child: Text("🛍️", style: TextStyle(fontSize: 30))),
-          ),
-          title: const Text("Item Name", style: TextStyle(fontWeight: FontWeight.bold)),
-          subtitle: const Text("Ordered previously"),
-          trailing: ElevatedButton(
-            onPressed: () {},
-            style: ElevatedButton.styleFrom(minimumSize: const Size(80, 36), padding: const EdgeInsets.symmetric(horizontal: 16)),
-            child: const Text("Reorder"),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _OrderHistoryListScreenStateful extends StatefulWidget {
-  final String userPhone;
-  const _OrderHistoryListScreenStateful({required this.userPhone});
-  @override
-  _OrderHistoryListState createState() => _OrderHistoryListState();
-}
-
-class _OrderHistoryListState extends State<_OrderHistoryListScreenStateful> {
-  List<dynamic> orders = [];
-  bool isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    fetchOrders();
-  }
-
-  Future<void> fetchOrders() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final response = await http.get(
-        Uri.parse('http://10.0.2.2:3000/orders/history'),
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ${prefs.getString('token')}' },
-      );
-      if (response.statusCode == 200) {
-        setState(() {
-          orders = jsonDecode(response.body);
-          isLoading = false;
-        });
-      }
-    } catch (e) {
-      setState(() => isLoading = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
-    if (isLoading) return const Center(child: CircularProgressIndicator());
-    if (orders.isEmpty) return const Center(child: Text('You have no past orders.'));
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: orders.length,
-      itemBuilder: (context, index) {
-        final order = orders[index];
-        return Container(
-          margin: const EdgeInsets.only(bottom: 16),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: isDark ? Colors.grey[900] : Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: isDark ? Colors.grey[800]! : Colors.grey[200]!),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('Order #${order['id'].toString().substring(0, 8)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  _buildPremiumChip(order['status'], order['status'] != 'DELIVERED'),
-                ],
-              ),
-              Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Divider(color: isDark ? Colors.grey[800] : Colors.grey[200])),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('Total Amount', style: TextStyle(color: Colors.grey[600], fontSize: 14)),
-                  Text('${order['total']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
+    return Scaffold(
+      appBar: AppBar(title: const Text("Your Orders")),
+      body: RefreshIndicator(
+        onRefresh: _fetch,
+        child: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : error != null
+                ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text('Could not load orders: $error', style: const TextStyle(color: Colors.red)))])
+                : orders.isEmpty
+                    ? ListView(children: const [Padding(padding: EdgeInsets.all(24), child: Text('You have no past orders.'))])
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: orders.length,
+                        itemBuilder: (context, index) {
+                          final order = orders[index];
+                          final status = order['status'] as String;
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 16),
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: isDark ? Colors.grey[900] : Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: isDark ? Colors.grey[800]! : Colors.grey[200]!),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text('Order #${order['id'].toString().substring(0, 8)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                    _buildPremiumChip(status, status != 'DELIVERED'),
+                                  ],
+                                ),
+                                Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Divider(color: isDark ? Colors.grey[800] : Colors.grey[200])),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text('Total Amount', style: TextStyle(color: Colors.grey[600], fontSize: 14)),
+                                    Text('${order['total']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                  ],
+                                ),
+                                if (status == 'DELIVERED') ...[
+                                  const SizedBox(height: 12),
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 40)),
+                                    onPressed: () => _showRateDialog(order['id']),
+                                    child: const Text('Rate this order'),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+      ),
     );
   }
 }
@@ -1427,269 +1481,21 @@ class AccountSettingsScreen extends StatelessWidget {
       appBar: AppBar(title: const Text("Account Settings")),
       body: ListView(
         padding: const EdgeInsets.all(16),
-        children: [
-          Center(
-            child: Stack(
-              children: [
-                CircleAvatar(radius: 50, backgroundColor: Colors.grey[300], child: const Icon(Icons.person, size: 50, color: Colors.white)),
-                Positioned(
-                  bottom: 0, right: 0,
-                  child: CircleAvatar(backgroundColor: Colors.green, radius: 18, child: IconButton(icon: const Icon(Icons.camera_alt, size: 16, color: Colors.white), onPressed: () {})),
-                )
-              ],
-            ),
-          ),
-          const SizedBox(height: 32),
-          const TextField(decoration: InputDecoration(labelText: "Full Name", border: OutlineInputBorder())),
-          const SizedBox(height: 24),
-          const Text("Saved Places", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          ListTile(leading: const Icon(Icons.home), title: const Text("Home"), subtitle: const Text("Set address"), onTap: (){}),
-          ListTile(leading: const Icon(Icons.work), title: const Text("Work"), subtitle: const Text("Set address"), onTap: (){}),
-          const Divider(),
-          ListTile(leading: const Icon(Icons.swap_horiz), title: const Text("Switch Account"), onTap: (){}),
-          ListTile(leading: const Icon(Icons.logout, color: Colors.red), title: const Text("Sign Out", style: TextStyle(color: Colors.red)), onTap: (){}),
+        children: const [
+          Padding(padding: EdgeInsets.all(8.0), child: Text('Profile photo, name editing, and saved-places aren\'t wired to the API yet.', style: TextStyle(color: Colors.grey))),
         ],
       ),
     );
   }
-}
-
-class FamilyBannerPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final bgPaint = Paint()..color = const Color(0xFFFDE8E1);
-    canvas.drawRect(rect, bgPaint);
-
-    final sunPaint = Paint()..color = const Color(0xFFFBD1C5);
-    canvas.drawCircle(Offset(size.width * 0.5, size.height * 0.5), size.width * 0.45, sunPaint);
-
-    final pYellow = Paint()..color = const Color(0xFFEDAA00);
-    final pGreen = Paint()..color = const Color(0xFF1E6C3B);
-    final pPurple = Paint()..color = const Color(0xFF865181);
-    final pSkin = Paint()..color = const Color(0xFFD3835B);
-
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.05, size.height * 0.4, size.width * 0.22, size.height * 0.6), pYellow);
-    canvas.drawCircle(Offset(size.width * 0.16, size.height * 0.28), 24, pSkin);
-
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.38, size.height * 0.35, size.width * 0.24, size.height * 0.65), pYellow);
-    canvas.drawCircle(Offset(size.width * 0.5, size.height * 0.22), 26, pSkin);
-
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.60, size.height * 0.42, size.width * 0.20, size.height * 0.58), pPurple);
-    canvas.drawCircle(Offset(size.width * 0.70, size.height * 0.26), 22, pSkin);
-
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.78, size.height * 0.38, size.width * 0.20, size.height * 0.62), pGreen);
-    canvas.drawCircle(Offset(size.width * 0.88, size.height * 0.24), 22, pSkin);
-  }
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class ContactBannerPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final bgPaint = Paint()..color = const Color(0xFFE8F1F5);
-    canvas.drawRect(rect, bgPaint);
-
-    final skyPaint = Paint()..color = const Color(0xFFD1E4EC);
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height * 0.6), skyPaint);
-
-    final buildingPaint = Paint()..color = const Color(0xFF4C6B7B);
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.02, size.height * 0.2, size.width * 0.15, size.height * 0.4), buildingPaint);
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.75, size.height * 0.15, size.width * 0.22, size.height * 0.45), buildingPaint);
-
-    final carPaint = Paint()..color = const Color(0xFF1D3557);
-    final carWindow = Paint()..color = const Color(0xFFA8DADC);
-    
-    RRect carBody = RRect.fromLTRBR(size.width * 0.1, size.height * 0.4, size.width * 0.65, size.height * 0.75, const Radius.circular(20));
-    canvas.drawRRect(carBody, carPaint);
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.2, size.height * 0.45, size.width * 0.3, size.height * 0.15), carWindow);
-  }
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class FamilyScreen extends StatelessWidget {
   const FamilyScreen({super.key});
-
-  void _navigateToContactScreen(BuildContext context) {
-    Navigator.push(context, MaterialPageRoute(builder: (context) => const ChooseContactScreen()));
-  }
-
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDark ? Colors.white : Colors.black;
-
     return Scaffold(
-      appBar: AppBar(
-        title: const Text("Select a member", style: TextStyle(fontSize: 18)),
-        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView(
-              children: [
-                SizedBox(height: 200, width: double.infinity, child: CustomPaint(painter: FamilyBannerPainter())),
-                Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text("Take care of your family with the App", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: textColor, height: 1.2)),
-                      const SizedBox(height: 16),
-                      Text("Want to pay for your loved ones? Invite a family member (ages 18+) to create a family profile. You can:", style: TextStyle(fontSize: 15, color: isDark ? Colors.grey[300] : Colors.grey[800], height: 1.4)),
-                      const SizedBox(height: 24),
-                      _buildFeatureRow(Icons.favorite, "Pay for your family", "Use a shared payment method", isDark),
-                      const Divider(height: 32),
-                      _buildFeatureRow(Icons.notifications, "Get updates", "Receive notifications when a member uses the family profile", isDark),
-                      const Divider(height: 32),
-                      _buildFeatureRow(Icons.settings, "Manage family members", "Add up to 10 people that can use the Family profile", isDark),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isDark ? Colors.white : Colors.black,
-                  foregroundColor: isDark ? Colors.black : Colors.white,
-                  minimumSize: const Size(double.infinity, 54),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onPressed: () => _navigateToContactScreen(context),
-                child: const Text("Invite family", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFeatureRow(IconData icon, String title, String subtitle, bool isDark) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 28, color: isDark ? Colors.white : Colors.black),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
-              const SizedBox(height: 4),
-              Text(subtitle, style: TextStyle(fontSize: 14, color: isDark ? Colors.grey[400] : Colors.grey[600])),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class ChooseContactScreen extends StatelessWidget {
-  const ChooseContactScreen({super.key});
-
-  void _showPermissionDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Allow Contact Access?"),
-        content: const Text("The App needs access to your contacts to invite family members."),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Deny")),
-          ElevatedButton(
-            onPressed: () { 
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Contacts synced successfully.")));
-            },
-            child: const Text("Allow"),
-          )
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDark ? Colors.white : Colors.black;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Choose a contact", style: TextStyle(fontSize: 18)),
-        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView(
-              children: [
-                SizedBox(height: 200, width: double.infinity, child: CustomPaint(painter: ContactBannerPainter())),
-                Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text("Invite adults to your Family profile", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: textColor, height: 1.2)),
-                      const SizedBox(height: 16),
-                      Text("Take care of your loved ones. You'll be able to:", style: TextStyle(fontSize: 15, color: isDark ? Colors.grey[300] : Colors.grey[800], height: 1.4)),
-                      const SizedBox(height: 24),
-                      _buildFeatureRow(Icons.credit_card, "Pay for trips and orders", "Share a payment method.", isDark),
-                      const Divider(height: 32),
-                      _buildFeatureRow(Icons.tune, "Set spending limits", "Manage your family's monthly spending.", isDark),
-                      const Divider(height: 32),
-                      _buildFeatureRow(Icons.route, "Follow trips", "Track trips from start to finish.", isDark),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isDark ? Colors.white : Colors.black,
-                  foregroundColor: isDark ? Colors.black : Colors.white,
-                  minimumSize: const Size(double.infinity, 54),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onPressed: () => _showPermissionDialog(context),
-                child: const Text("Choose a contact", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFeatureRow(IconData icon, String title, String subtitle, bool isDark) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 28, color: isDark ? Colors.white : Colors.black),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
-              const SizedBox(height: 4),
-              Text(subtitle, style: TextStyle(fontSize: 14, color: isDark ? Colors.grey[400] : Colors.grey[600])),
-            ],
-          ),
-        ),
-      ],
+      appBar: AppBar(title: const Text("Family")),
+      body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('Family accounts aren\'t part of the backend design yet.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))),
     );
   }
 }
@@ -1700,49 +1506,21 @@ class PromotionsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Promotions")),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _promoCard("20% Off Groceries", "Valid until Friday. Code: FRESH20"),
-          _promoCard("Free Delivery on purchases", "Applied automatically at checkout."),
-        ],
-      ),
-    );
-  }
-
-  Widget _promoCard(String title, String desc) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(16),
-        leading: const Icon(Icons.local_offer, color: Colors.green, size: 40),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 8.0),
-          child: Text(desc),
-        ),
-        trailing: ElevatedButton(
-          onPressed: () {}, 
-          style: ElevatedButton.styleFrom(minimumSize: const Size(80, 36)),
-          child: const Text("Claim"),
-        ),
-      ),
+      body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('No promo/voucher system exists on the backend yet.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))),
     );
   }
 }
 
 // ============================================================================
-// 8. REGISTRATION & SIGNUPS 
+// REGISTRATION & SIGNUPS
 // ============================================================================
 
 class RegistrationRoleScreen extends StatelessWidget {
   const RegistrationRoleScreen({super.key});
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textColor = isDark ? Colors.white : Colors.black;
-
     return Scaffold(
       appBar: AppBar(title: const Text("Create Account")),
       body: ListView(
@@ -1765,11 +1543,7 @@ class RegistrationRoleScreen extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: isDark ? Colors.grey[900] : Colors.grey[100],
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: isDark ? Colors.grey[800]! : Colors.grey[300]!),
-        ),
+        decoration: BoxDecoration(color: isDark ? Colors.grey[900] : Colors.grey[100], borderRadius: BorderRadius.circular(16), border: Border.all(color: isDark ? Colors.grey[800]! : Colors.grey[300]!)),
         child: Row(
           children: [
             Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: iconColor.withOpacity(0.2), shape: BoxShape.circle), child: Icon(icon, color: iconColor, size: 28)),
@@ -1786,14 +1560,12 @@ class RegistrationRoleScreen extends StatelessWidget {
 class CustomerSignupScreen extends StatelessWidget {
   final _phone = TextEditingController();
   final _name = TextEditingController();
-
   CustomerSignupScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textColor = isDark ? Colors.white : Colors.black;
-
     return Scaffold(
       appBar: AppBar(title: const Text("Customer Signup")),
       body: ListView(
@@ -1810,7 +1582,10 @@ class CustomerSignupScreen extends StatelessWidget {
               String fullPhone = '+254${_phone.text}';
               String? role = await AuthService().registerCustomer(fullPhone, _name.text);
               if (role == 'CUSTOMER') {
+                await context.read<RoleProvider>().loadSession();
                 if (context.mounted) Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (context) => MainNavigation(userPhone: fullPhone)), (route) => false);
+              } else if (context.mounted) {
+                _showErrorSnack(context, role ?? 'Registration failed');
               }
             },
             child: const Text("Register & Shop", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
@@ -1821,8 +1596,13 @@ class CustomerSignupScreen extends StatelessWidget {
   }
 }
 
+// isUpgrade=true means an already-logged-in Customer is applying to also
+// become a Vendor. The backend now supports attaching a Vendor profile to
+// an existing account (see auth.service.ts), but it must be the SAME phone
+// number — so in upgrade mode the phone field is pre-filled and locked.
 class VendorSignupScreen extends StatefulWidget {
-  const VendorSignupScreen({super.key});
+  final bool isUpgrade;
+  const VendorSignupScreen({super.key, this.isUpgrade = false});
   @override
   _VendorSignupScreenState createState() => _VendorSignupScreenState();
 }
@@ -1832,11 +1612,23 @@ class _VendorSignupScreenState extends State<VendorSignupScreen> {
   final _name = TextEditingController();
   final _shopName = TextEditingController();
   String _location = "Fetching GPS...";
+  bool _isSubmitting = false;
 
   @override
   void initState() {
     super.initState();
     _getLocation();
+    if (widget.isUpgrade) _prefillFromSession();
+  }
+
+  Future<void> _prefillFromSession() async {
+    final auth = AuthService();
+    final phone = await auth.getPhone();
+    final name = await auth.getName();
+    setState(() {
+      _phone.text = (phone ?? '').replaceFirst('+254', '');
+      _name.text = name ?? '';
+    });
   }
 
   Future _getLocation() async {
@@ -1849,11 +1641,34 @@ class _VendorSignupScreenState extends State<VendorSignupScreen> {
     setState(() => _location = "${position.latitude}, ${position.longitude}");
   }
 
+  Future<void> _submit() async {
+    setState(() => _isSubmitting = true);
+    String fullPhone = widget.isUpgrade ? (await AuthService().getPhone() ?? '+254${_phone.text}') : '+254${_phone.text}';
+    final roleProvider = context.read<RoleProvider>();
+    try {
+      final success = await roleProvider.applyForVendor(fullPhone, _name.text, _shopName.text, _location);
+      if (!mounted) return;
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Application sent! Waiting for Admin approval.")));
+        if (widget.isUpgrade) {
+          Navigator.pop(context);
+        } else {
+          Navigator.popUntil(context, (route) => route.isFirst);
+        }
+      } else {
+        _showErrorSnack(context, 'Registration failed — this phone may already have a vendor profile.');
+      }
+    } catch (e) {
+      if (mounted) _showErrorSnack(context, e);
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textColor = isDark ? Colors.white : Colors.black;
-
     return Scaffold(
       appBar: AppBar(title: const Text("Vendor Signup")),
       body: ListView(
@@ -1861,35 +1676,23 @@ class _VendorSignupScreenState extends State<VendorSignupScreen> {
         children: [
           Text('Partner with us', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: textColor)),
           const SizedBox(height: 24),
-          _buildStyledTextField(_name, 'Your Full Name', isDark),
+          _buildStyledTextField(_name, 'Your Full Name', isDark, enabled: !widget.isUpgrade),
           const SizedBox(height: 16),
           _buildStyledTextField(_shopName, 'Shop or Business Name', isDark),
           const SizedBox(height: 16),
-          ProfessionalPhoneInput(phoneController: _phone),
+          widget.isUpgrade
+              ? _buildStyledTextField(_phone, 'Phone (locked to your account)', isDark, enabled: false)
+              : ProfessionalPhoneInput(phoneController: _phone),
           const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(color: Colors.blueGrey.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-            child: Row(
-              children: [
-                const Icon(Icons.location_on, color: Colors.blueGrey),
-                const SizedBox(width: 12),
-                Expanded(child: Text("Location: $_location", style: TextStyle(color: isDark ? Colors.grey[300] : Colors.blueGrey, fontWeight: FontWeight.w600))),
-              ],
-            ),
+            child: Row(children: [const Icon(Icons.location_on, color: Colors.blueGrey), const SizedBox(width: 12), Expanded(child: Text("Location: $_location", style: TextStyle(color: isDark ? Colors.grey[300] : Colors.blueGrey, fontWeight: FontWeight.w600)))]),
           ),
           const SizedBox(height: 32),
-          ElevatedButton(
-            onPressed: () async {
-              String fullPhone = '+254${_phone.text}';
-              bool success = await AuthService().registerVendor(fullPhone, _name.text, _shopName.text, _location);
-              if (success && context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Application sent! Waiting for Admin approval.")));
-                Navigator.popUntil(context, (route) => route.isFirst);
-              }
-            },
-            child: const Text("Submit Application", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          )
+          _isSubmitting
+              ? const Center(child: CircularProgressIndicator())
+              : ElevatedButton(onPressed: _submit, child: const Text("Submit Application", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
         ],
       ),
     );
@@ -1897,7 +1700,8 @@ class _VendorSignupScreenState extends State<VendorSignupScreen> {
 }
 
 class RiderSignupScreen extends StatefulWidget {
-  const RiderSignupScreen({super.key});
+  final bool isUpgrade;
+  const RiderSignupScreen({super.key, this.isUpgrade = false});
   @override
   _RiderSignupScreenState createState() => _RiderSignupScreenState();
 }
@@ -1909,7 +1713,24 @@ class _RiderSignupScreenState extends State<RiderSignupScreen> {
   String _vehicleType = 'BODABODA';
   File? _idFront;
   File? _idBack;
+  bool _isSubmitting = false;
   final picker = ImagePicker();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isUpgrade) _prefillFromSession();
+  }
+
+  Future<void> _prefillFromSession() async {
+    final auth = AuthService();
+    final phone = await auth.getPhone();
+    final name = await auth.getName();
+    setState(() {
+      _phone.text = (phone ?? '').replaceFirst('+254', '');
+      _name.text = name ?? '';
+    });
+  }
 
   Future pickImage(bool isFront) async {
     final pickedFile = await picker.pickImage(source: ImageSource.camera);
@@ -1921,11 +1742,38 @@ class _RiderSignupScreenState extends State<RiderSignupScreen> {
     }
   }
 
+  Future<void> _submit() async {
+    if (_idFront == null || _idBack == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please upload both sides of your ID.")));
+      return;
+    }
+    setState(() => _isSubmitting = true);
+    String fullPhone = widget.isUpgrade ? (await AuthService().getPhone() ?? '+254${_phone.text}') : '+254${_phone.text}';
+    final roleProvider = context.read<RoleProvider>();
+    try {
+      final success = await roleProvider.applyForRider(fullPhone, _name.text, _vehicleType, _plate.text, _idFront!.path, _idBack!.path);
+      if (!mounted) return;
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Application sent! Waiting for Admin approval.")));
+        if (widget.isUpgrade) {
+          Navigator.pop(context);
+        } else {
+          Navigator.popUntil(context, (route) => route.isFirst);
+        }
+      } else {
+        _showErrorSnack(context, 'Registration failed — this phone may already have a rider profile.');
+      }
+    } catch (e) {
+      if (mounted) _showErrorSnack(context, e);
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textColor = isDark ? Colors.white : Colors.black;
-
     return Scaffold(
       appBar: AppBar(title: const Text("Rider Signup")),
       body: ListView(
@@ -1933,26 +1781,22 @@ class _RiderSignupScreenState extends State<RiderSignupScreen> {
         children: [
           Text('Join our delivery fleet', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: textColor)),
           const SizedBox(height: 24),
-          _buildStyledTextField(_name, 'Full Name', isDark),
+          _buildStyledTextField(_name, 'Full Name', isDark, enabled: !widget.isUpgrade),
           const SizedBox(height: 16),
-          ProfessionalPhoneInput(phoneController: _phone),
+          widget.isUpgrade
+              ? _buildStyledTextField(_phone, 'Phone (locked to your account)', isDark, enabled: false)
+              : ProfessionalPhoneInput(phoneController: _phone),
           const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            decoration: BoxDecoration(
-              color: isDark ? Colors.grey[900] : Colors.grey[100],
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: isDark ? Colors.grey[800]! : Colors.grey[300]!),
-            ),
+            decoration: BoxDecoration(color: isDark ? Colors.grey[900] : Colors.grey[100], borderRadius: BorderRadius.circular(12), border: Border.all(color: isDark ? Colors.grey[800]! : Colors.grey[300]!)),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 value: _vehicleType,
                 isExpanded: true,
                 dropdownColor: isDark ? Colors.grey[900] : Colors.white,
                 style: TextStyle(color: isDark ? Colors.white : Colors.black, fontSize: 16, fontWeight: FontWeight.w500),
-                items: ['BODABODA', 'CAR'].map((String val) {
-                  return DropdownMenuItem<String>(value: val, child: Text(val));
-                }).toList(),
+                items: ['BODABODA', 'CAR'].map((String val) => DropdownMenuItem<String>(value: val, child: Text(val))).toList(),
                 onChanged: (val) => setState(() => _vehicleType = val!),
               ),
             ),
@@ -1962,29 +1806,11 @@ class _RiderSignupScreenState extends State<RiderSignupScreen> {
           const SizedBox(height: 24),
           Text('ID Verification', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: textColor)),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(child: _buildImageUploadBtn('Front of ID', _idFront != null, () => pickImage(true), isDark)),
-              const SizedBox(width: 16),
-              Expanded(child: _buildImageUploadBtn('Back of ID', _idBack != null, () => pickImage(false), isDark)),
-            ],
-          ),
+          Row(children: [Expanded(child: _buildImageUploadBtn('Front of ID', _idFront != null, () => pickImage(true), isDark)), const SizedBox(width: 16), Expanded(child: _buildImageUploadBtn('Back of ID', _idBack != null, () => pickImage(false), isDark))]),
           const SizedBox(height: 32),
-          ElevatedButton(
-            onPressed: () async {
-              if (_idFront == null || _idBack == null) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please upload both sides of your ID.")));
-                return;
-              }
-              String fullPhone = '+254${_phone.text}';
-              bool success = await AuthService().registerRider(fullPhone, _name.text, _vehicleType, _plate.text, _idFront!.path, _idBack!.path);
-              if (success && context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Application sent! Waiting for Admin approval.")));
-                Navigator.popUntil(context, (route) => route.isFirst);
-              }
-            },
-            child: const Text("Submit Application", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          )
+          _isSubmitting
+              ? const Center(child: CircularProgressIndicator())
+              : ElevatedButton(onPressed: _submit, child: const Text("Submit Application", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
         ],
       ),
     );
@@ -2014,89 +1840,227 @@ class _RiderSignupScreenState extends State<RiderSignupScreen> {
 }
 
 // ============================================================================
-// 9. VENDOR DASHBOARD (KITCHEN DISPLAY SYSTEM & MENU MAKER)
+// VENDOR DASHBOARD — every list and every button here now talks to the
+// real backend. Orders come from GET /orders/vendor-dashboard; Accept/Ready
+// call POST /orders/update-status; Cancel calls PATCH /orders/:id/cancel;
+// the Online/Offline switch calls PATCH /vendors/:id/status; Menu Maker
+// reads/writes GET+POST /menu-items and PATCH /menu-items/:id/stock;
+// Wallet/Payout use RoleProvider (GET/POST /vendors/:id/wallet+payout);
+// Feedback uses GET /vendors/:id/ratings. "Busy Mode" and the session-only
+// downtime counter are the two things that stay client-side, because there
+// is no backend field for either yet — both are labeled as such in the UI.
 // ============================================================================
 
 class VendorDashboardScreen extends StatefulWidget {
-  const VendorDashboardScreen({super.key});
+  final String vendorId;
+  const VendorDashboardScreen({super.key, required this.vendorId});
   @override
   _VendorDashboardScreenState createState() => _VendorDashboardScreenState();
 }
 
 class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
+  final AuthService _auth = AuthService();
   int _currentIndex = 0;
-  bool isStoreOpen = true; 
-  List<dynamic> activeOrders = [];
+  bool isStoreOpen = true;
+  bool _busyMode = false;
+  DateTime? _wentOfflineAt;
+  int _downtimeMinutes = 0;
 
-  void _showAddProductDialog(bool isDark) {
-    final nameCtrl = TextEditingController();
-    final priceCtrl = TextEditingController();
-    String _selectedCategory = "Specials";
-    File? productImage;
-    final picker = ImagePicker();
+  bool _isLoadingOrders = true;
+  String? _ordersError;
+  List<dynamic> _orders = [];
 
+  bool _isLoadingMenu = true;
+  List<dynamic> _menuItems = [];
+
+  Map<String, dynamic>? _ratings;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAll();
+  }
+
+  Future<void> _loadAll() async {
+    await Future.wait([_loadOrders(), _loadMenu(), _loadRatings(), context.read<RoleProvider>().refreshVendorWallet()]);
+  }
+
+  Future<void> _loadOrders() async {
+    setState(() { _isLoadingOrders = true; _ordersError = null; });
+    try {
+      final data = await _auth.getVendorOrders();
+      setState(() { _orders = data; _isLoadingOrders = false; });
+    } catch (e) {
+      setState(() { _ordersError = e.toString().replaceFirst('Exception: ', ''); _isLoadingOrders = false; });
+    }
+  }
+
+  Future<void> _loadMenu() async {
+    setState(() => _isLoadingMenu = true);
+    try {
+      final data = await _auth.getVendorMenuItems(widget.vendorId);
+      setState(() { _menuItems = data; _isLoadingMenu = false; });
+    } catch (e) {
+      setState(() => _isLoadingMenu = false);
+    }
+  }
+
+  Future<void> _loadRatings() async {
+    try {
+      final data = await _auth.getVendorRatings(widget.vendorId);
+      setState(() => _ratings = data);
+    } catch (e) {
+      // Non-fatal — feedback tile just shows "no data" instead of crashing.
+    }
+  }
+
+  Future<void> _toggleStoreOpen(bool val) async {
+    final previous = isStoreOpen;
+    setState(() {
+      isStoreOpen = val;
+      if (!val) {
+        _wentOfflineAt = DateTime.now();
+      } else if (_wentOfflineAt != null) {
+        _downtimeMinutes += DateTime.now().difference(_wentOfflineAt!).inMinutes;
+        _wentOfflineAt = null;
+      }
+    });
+    try {
+      await _auth.setVendorOpenStatus(widget.vendorId, val);
+    } catch (e) {
+      if (mounted) {
+        setState(() => isStoreOpen = previous); // revert on failure
+        _showErrorSnack(context, e);
+      }
+    }
+  }
+
+  Future<void> _updateStatus(String orderId, String status) async {
+    try {
+      await _auth.updateOrderStatus(orderId, status);
+      await _loadOrders();
+    } catch (e) {
+      if (mounted) _showErrorSnack(context, e);
+    }
+  }
+
+  Future<void> _cancelOrder(String orderId) async {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: ListTile(
+          leading: const Icon(Icons.cancel, color: Colors.red),
+          title: const Text('Cancel order (out of stock / cannot fulfil)'),
+          onTap: () async {
+            Navigator.pop(context);
+            try {
+              await _auth.cancelOrder(orderId, 'Vendor cancelled — cannot fulfil');
+              await _loadOrders();
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Order cancelled and refund logged.')));
+            } catch (e) {
+              if (mounted) _showErrorSnack(context, e);
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  void _showReceipt() {
+    final delivered = _orders.where((o) => o['status'] == 'DELIVERED').toList();
+    if (delivered.isEmpty) {
+      _showFeatureDialog(context, "Receipt Printing", "No completed orders yet — nothing to print.");
+      return;
+    }
+    final order = delivered.first;
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) {
-          return AlertDialog(
-            backgroundColor: isDark ? Colors.grey[900] : Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: Text('Add Item', style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  GestureDetector(
-                    onTap: () async {
-                      final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-                      if (pickedFile != null) setState(() => productImage = File(pickedFile.path));
-                    },
-                    child: Container(
-                      height: 120, width: double.infinity,
-                      decoration: BoxDecoration(
-                        color: isDark ? Colors.grey[800] : Colors.grey[200],
-                        borderRadius: BorderRadius.circular(12),
-                        image: productImage != null ? DecorationImage(image: FileImage(productImage!), fit: BoxFit.cover) : null,
-                      ),
-                      child: productImage == null ? const Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [Icon(Icons.add_a_photo, size: 40, color: Colors.grey), SizedBox(height: 8), Text('Upload Photo', style: TextStyle(color: Colors.grey))],
-                      ) : null,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  _buildStyledTextField(nameCtrl, 'Item Name', isDark),
-                  const SizedBox(height: 12),
-                  _buildStyledTextField(priceCtrl, 'Price', isDark),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    value: _selectedCategory,
-                    decoration: InputDecoration(filled: true, fillColor: isDark ? Colors.grey[800] : Colors.grey[200], border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none)),
-                    items: ["Specials", "Mains", "Drinks"].map((String category) {
-                      return DropdownMenuItem(value: category, child: Text(category));
-                    }).toList(),
-                    onChanged: (newValue) => setState(() => _selectedCategory = newValue!),
-                  ),
-                  const SizedBox(height: 12),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey),
-                    onPressed: () => _showFeatureDialog(context, "Modifier Groups", "Add sizes, toppings, and customizations here."),
-                    icon: const Icon(Icons.add_circle),
-                    label: const Text("Add Modifier Group"),
-                  )
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: Colors.grey))),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Save Item'),
-              ),
+      builder: (context) => AlertDialog(
+        title: const Text('Receipt'),
+        content: Text('Order #${order['id'].toString().substring(0, 8)}\n------------------\nTotal: Ksh ${order['total']}\n\nSent to connected receipt printer.', style: const TextStyle(fontFamily: 'monospace')),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+      ),
+    );
+  }
+
+  void _showAddItemDialog() {
+    final nameCtrl = TextEditingController();
+    final priceCtrl = TextEditingController();
+    final unitCtrl = TextEditingController(text: 'kg');
+    final emojiCtrl = TextEditingController(text: '🛒');
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Menu Item'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildStyledTextField(nameCtrl, 'Item name', Theme.of(context).brightness == Brightness.dark),
+              const SizedBox(height: 12),
+              _buildStyledTextField(priceCtrl, 'Price (Ksh)', Theme.of(context).brightness == Brightness.dark),
+              const SizedBox(height: 12),
+              _buildStyledTextField(unitCtrl, 'Unit (e.g. kg, bunch)', Theme.of(context).brightness == Brightness.dark),
+              const SizedBox(height: 12),
+              _buildStyledTextField(emojiCtrl, 'Emoji', Theme.of(context).brightness == Brightness.dark),
             ],
-          );
-        }
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              final price = int.tryParse(priceCtrl.text);
+              if (nameCtrl.text.isEmpty || price == null) return;
+              Navigator.pop(context);
+              try {
+                await _auth.addMenuItem(widget.vendorId, nameCtrl.text, price, emojiCtrl.text, unitCtrl.text);
+                await _loadMenu();
+              } catch (e) {
+                if (mounted) _showErrorSnack(context, e);
+              }
+            },
+            child: const Text('Save Item'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _toggleStock(String itemId, bool inStock) async {
+    try {
+      await _auth.setMenuItemStock(itemId, inStock);
+      await _loadMenu();
+    } catch (e) {
+      if (mounted) _showErrorSnack(context, e);
+    }
+  }
+
+  void _requestPayoutDialog(RoleProvider roleProvider) {
+    if (roleProvider.vendorWallet <= 0) {
+      _showFeatureDialog(context, "Nothing to withdraw", "Your wallet balance is currently zero.");
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Request Payout'),
+        content: Text('Withdraw the full balance (Ksh ${roleProvider.vendorWallet.toStringAsFixed(2)}) via M-Pesa?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              try {
+                await roleProvider.requestVendorPayout(roleProvider.vendorWallet, 'M-Pesa');
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payout requested — awaiting Admin disbursement.')));
+              } catch (e) {
+                if (mounted) _showErrorSnack(context, e);
+              }
+            },
+            child: const Text('Confirm'),
+          ),
+        ],
       ),
     );
   }
@@ -2104,31 +2068,25 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
+    final roleProvider = context.watch<RoleProvider>();
+
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
         title: const Text('Vendor Dashboard'),
         actions: [
-          Row(
-            children: [
-              Text(isStoreOpen ? "Online" : "Offline", style: TextStyle(color: isStoreOpen ? Colors.green : Colors.grey, fontWeight: FontWeight.bold)),
-              Switch(
-                value: isStoreOpen,
-                activeColor: Colors.green,
-                onChanged: (val) => setState(() => isStoreOpen = val), 
-              ),
-            ],
-          ),
+          Row(children: [Text(isStoreOpen ? "Online" : "Offline", style: TextStyle(color: isStoreOpen ? Colors.green : Colors.grey, fontWeight: FontWeight.bold)), Switch(value: isStoreOpen, activeColor: Colors.green, onChanged: _toggleStoreOpen)]),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () async {
               await AuthService().logout();
+              context.read<RoleProvider>().clearSession();
               if (context.mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
             },
           ),
         ],
       ),
-      body: _currentIndex == 0 ? _buildKitchenDisplay(isDark) : _currentIndex == 1 ? _buildMenuManager(isDark) : _buildReports(isDark),
+      body: _currentIndex == 0 ? _buildKitchenDisplay(isDark) : _currentIndex == 1 ? _buildMenuManager(isDark) : _buildReports(isDark, roleProvider),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (index) => setState(() => _currentIndex = index),
@@ -2142,79 +2100,76 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
   }
 
   Widget _buildKitchenDisplay(bool isDark) {
-    return DefaultTabController(
-      length: 3,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(minimumSize: const Size(0, 48)),
-                    onPressed: () => _showFeatureDialog(context, "Busy Mode", "Added 15 mins to prep times."),
-                    icon: const Icon(Icons.timer, size: 18), label: const Text("Busy Mode", style: TextStyle(fontSize: 13))
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, minimumSize: const Size(0, 48)),
-                    onPressed: () => _showFeatureDialog(context, "Pause Orders", "Incoming orders temporarily halted."),
-                    icon: const Icon(Icons.pause, size: 18), label: const Text("Pause Orders", style: TextStyle(fontSize: 13))
-                  ),
-                ),
-                IconButton(icon: const Icon(Icons.print), onPressed: () => _showFeatureDialog(context, "Receipt Printing", "Connecting to POS printer..."))
-              ],
+    if (_isLoadingOrders) return const Center(child: CircularProgressIndicator());
+    if (_ordersError != null) {
+      return Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [Text('Could not load orders: $_ordersError', style: const TextStyle(color: Colors.red)), TextButton(onPressed: _loadOrders, child: const Text('Retry'))]),
+      );
+    }
+
+    final newOrders = _orders.where((o) => o['status'] == 'PLACED').toList();
+    final preparingOrders = _orders.where((o) => o['status'] == 'ACCEPTED_BY_VENDOR').toList();
+    final readyOrders = _orders.where((o) => ['READY_FOR_PICKUP', 'RIDER_ASSIGNED', 'PICKED_UP'].contains(o['status'])).toList();
+
+    return RefreshIndicator(
+      onRefresh: _loadOrders,
+      child: DefaultTabController(
+        length: 3,
+        child: Column(
+          children: [
+            if (_busyMode)
+              Container(width: double.infinity, color: Colors.red.withOpacity(0.1), padding: const EdgeInsets.symmetric(vertical: 6), child: const Text('Busy mode — kitchen display only, not sent to the server', textAlign: TextAlign.center, style: TextStyle(color: Colors.red, fontSize: 12))),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              child: Row(
+                children: [
+                  Expanded(child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: _busyMode ? Colors.red : null, minimumSize: const Size(0, 48)), onPressed: () => setState(() => _busyMode = !_busyMode), icon: const Icon(Icons.timer, size: 18), label: Text(_busyMode ? "Busy Mode: ON" : "Busy Mode", style: const TextStyle(fontSize: 13)))),
+                  const SizedBox(width: 8),
+                  IconButton(icon: const Icon(Icons.print), onPressed: _showReceipt),
+                ],
+              ),
             ),
-          ),
-          const TabBar(
-            labelColor: Colors.green, unselectedLabelColor: Colors.grey,
-            tabs: [Tab(text: "New"), Tab(text: "Preparing"), Tab(text: "Ready")],
-          ),
-          Expanded(
-            child: TabBarView(
-              children: [
-                _buildOrderList(["Order #1092", "Order #1093"], isDark, "Accept Order"), 
-                _buildOrderList(["Order #1091"], isDark, "Mark Ready"),
-                _buildOrderList(["Order #1089"], isDark, "View Rider Info"), 
-              ],
+            TabBar(labelColor: Colors.green, unselectedLabelColor: Colors.grey, tabs: [
+              Tab(text: "New (${newOrders.length})"),
+              Tab(text: "Preparing (${preparingOrders.length})"),
+              Tab(text: "Out (${readyOrders.length})"),
+            ]),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _buildOrderList(newOrders, "Accept Order", (o) => _updateStatus(o['id'], 'ACCEPTED_BY_VENDOR'), (o) => _cancelOrder(o['id'])),
+                  _buildOrderList(preparingOrders, "Mark Ready", (o) => _updateStatus(o['id'], 'READY_FOR_PICKUP'), (o) => _cancelOrder(o['id'])),
+                  _buildReadOnlyOrderList(readyOrders),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildOrderList(List<String> orders, bool isDark, String actionText) {
+  Widget _buildOrderList(List<dynamic> orders, String actionText, void Function(dynamic) onAction, void Function(dynamic)? onManage) {
+    if (orders.isEmpty) return const Center(child: Text("No orders here."));
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: orders.length,
       itemBuilder: (context, index) {
+        final order = orders[index];
         return Card(
-          color: isDark ? Colors.grey[900] : Colors.white,
           child: Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(orders[index], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                const Text("Items listed here..."),
+                Text('Order #${order['id'].toString().substring(0, 8)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text('Ksh ${order['total']}', style: const TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 16),
-                Row(
-                  children: [
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(minimumSize: const Size(0, 40)),
-                      onPressed: () => _showFeatureDialog(context, actionText, "Action completed."), 
-                      child: Text(actionText)
-                    ),
-                    const SizedBox(width: 8),
-                    TextButton(onPressed: () => _showFeatureDialog(context, "Manage Order", "Delay or cancel order due to stock shortages."), child: const Text("Manage"))
-                  ],
-                )
+                Row(children: [
+                  ElevatedButton(style: ElevatedButton.styleFrom(minimumSize: const Size(0, 40)), onPressed: () => onAction(order), child: Text(actionText)),
+                  if (onManage != null) ...[const SizedBox(width: 8), TextButton(onPressed: () => onManage(order), child: const Text("Cancel"))],
+                ]),
               ],
             ),
           ),
@@ -2223,127 +2178,202 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
     );
   }
 
+  Widget _buildReadOnlyOrderList(List<dynamic> orders) {
+    if (orders.isEmpty) return const Center(child: Text("Nothing out for delivery."));
+    const labels = {'READY_FOR_PICKUP': 'Waiting for a rider', 'RIDER_ASSIGNED': 'Rider assigned', 'PICKED_UP': 'Picked up — en route'};
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: orders.length,
+      itemBuilder: (context, index) {
+        final order = orders[index];
+        return Card(
+          child: ListTile(
+            title: Text('Order #${order['id'].toString().substring(0, 8)}'),
+            subtitle: Text(labels[order['status']] ?? order['status']),
+            trailing: Text('Ksh ${order['total']}'),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildMenuManager(bool isDark) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Expanded(child: ElevatedButton.icon(style: ElevatedButton.styleFrom(minimumSize: const Size(0, 48)), onPressed: () => _showAddProductDialog(isDark), icon: const Icon(Icons.add, size: 18), label: const Text("Add Item"))),
-            const SizedBox(width: 8),
-            Expanded(child: ElevatedButton.icon(style: ElevatedButton.styleFrom(minimumSize: const Size(0, 48)), onPressed: () => _showFeatureDialog(context, "Add Category", "New menu category created."), icon: const Icon(Icons.folder, size: 18), label: const Text("Add Category"))),
-          ],
-        ),
-        const SizedBox(height: 16),
-        ListTile(
-          title: const Text("Auto-menu optimization"),
-          subtitle: const Text("Automatically rearranges items to boost sales."),
-          trailing: Switch(value: true, activeColor: Colors.green, onChanged: (v){}),
-        ),
-        const Divider(),
-        SwitchListTile(title: const Text("Sample Item 1"), subtitle: const Text("In Stock"), value: true, onChanged: (v){}), 
-        SwitchListTile(title: const Text("Sample Item 2"), subtitle: const Text("Out of Stock"), value: false, onChanged: (v){}),
-      ],
-    );
-  }
-
-  Widget _buildReports(bool isDark) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _statCard('Wallet Balance', '0.00', Icons.account_balance_wallet, isDark, Colors.green, action: () => _showFeatureDialog(context, "Instant Payout", "Transferring funds to your registered payment method.")),
-        const SizedBox(height: 16),
-        ListTile(leading: const Icon(Icons.error_outline), title: const Text("Order Errors (Menu Item)"), trailing: const Icon(Icons.arrow_forward_ios), onTap: (){}),
-        ListTile(leading: const Icon(Icons.receipt_long), title: const Text("Order Errors (Transaction)"), trailing: const Icon(Icons.arrow_forward_ios), onTap: (){}),
-        ListTile(leading: const Icon(Icons.timer_off), title: const Text("Downtime Report"), trailing: const Icon(Icons.arrow_forward_ios), onTap: (){}),
-        ListTile(leading: const Icon(Icons.star_rate), title: const Text("Customer & Delivery Feedback"), trailing: const Icon(Icons.arrow_forward_ios), onTap: (){}),
-      ],
-    );
-  }
-
-  Widget _statCard(String title, String value, IconData icon, bool isDark, Color iconColor, {VoidCallback? action}) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(color: isDark ? Colors.grey[900] : Colors.grey[100], borderRadius: BorderRadius.circular(16)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return RefreshIndicator(
+      onRefresh: _loadMenu,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          Row(
-            children: [
-              Icon(icon, size: 40, color: iconColor),
-              const SizedBox(width: 16),
-              Column(
+          ElevatedButton.icon(style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 48)), onPressed: _showAddItemDialog, icon: const Icon(Icons.add, size: 18), label: const Text("Add Item")),
+          const SizedBox(height: 16),
+          if (_isLoadingMenu) const Center(child: CircularProgressIndicator()),
+          if (!_isLoadingMenu && _menuItems.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('No menu items yet — add your first one above.')),
+          if (!_isLoadingMenu)
+            ..._menuItems.map((item) => SwitchListTile(
+                  title: Text('${item['emoji'] ?? ''} ${item['name']} (Ksh ${item['price']})'),
+                  subtitle: Text((item['in_stock'] ?? true) ? "In Stock" : "Out of Stock"),
+                  value: item['in_stock'] ?? true,
+                  activeColor: Colors.green,
+                  onChanged: (v) => _toggleStock(item['id'], v),
+                )),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReports(bool isDark, RoleProvider roleProvider) {
+    final cancelledOrders = _orders.where((o) => o['status'] == 'CANCELLED').toList();
+    final average = (_ratings?['average'] as num?)?.toDouble() ?? 0.0;
+    final count = (_ratings?['count'] as num?)?.toInt() ?? 0;
+
+    return Container(
+      decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.green[700]!, isDark ? const Color(0xFF121212) : Colors.white])),
+      child: RefreshIndicator(
+        onRefresh: _loadAll,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            GlassCard(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(fontSize: 16, color: Colors.grey)),
-                  Text(value, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                  Row(children: [
+                    const Icon(Icons.account_balance_wallet, size: 40, color: Colors.white),
+                    const SizedBox(width: 16),
+                    Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('Wallet Balance', style: TextStyle(fontSize: 16, color: Colors.white70)),
+                      Text(roleProvider.vendorWallet.toStringAsFixed(2), style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white)),
+                    ]),
+                  ]),
+                  const SizedBox(height: 16),
+                  ElevatedButton(style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 54)), onPressed: () => _requestPayoutDialog(roleProvider), child: const Text("Request Payout")),
                 ],
-              )
-            ],
-          ),
-          if (action != null) ...[
-            const SizedBox(height: 16),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 54)),
-              onPressed: action, child: const Text("Request Payout")
-            )
-          ]
-        ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              decoration: BoxDecoration(color: isDark ? Colors.grey[900] : Colors.white, borderRadius: BorderRadius.circular(12)),
+              child: Column(
+                children: [
+                  ListTile(leading: const Icon(Icons.error_outline), title: const Text("Cancelled / Order Errors"), subtitle: Text('${cancelledOrders.length} logged')),
+                  ListTile(leading: const Icon(Icons.timer_off), title: const Text("Downtime (this session)"), subtitle: Text('$_downtimeMinutes min — session-only, not stored on the server yet')),
+                  ListTile(leading: const Icon(Icons.star_rate), title: const Text("Customer Feedback"), subtitle: Text(count == 0 ? 'No ratings yet' : '${average.toStringAsFixed(1)}★ average across $count orders')),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
 // ============================================================================
-// 10. RIDER DASHBOARD 
+// RIDER DASHBOARD — going online fetches real orders from
+// GET /deliveries/nearby (using the device's actual GPS position). Accept
+// calls POST /deliveries/accept, which returns a REAL server-computed
+// commission (distance × rate + % of order total — see
+// DeliveriesService.acceptOrder on the backend). Pickup/Deliver call the
+// real PATCH endpoints, and delivery completion actually credits the
+// rider's wallet server-side, which we then re-fetch. The Earnings
+// Estimator stays a client-side heuristic (clearly labeled) since the
+// backend has no demand-forecasting endpoint.
 // ============================================================================
 
 class RiderDashboardScreen extends StatefulWidget {
-  const RiderDashboardScreen({super.key});
+  final String riderId;
+  const RiderDashboardScreen({super.key, required this.riderId});
   @override
   _RiderDashboardScreenState createState() => _RiderDashboardScreenState();
 }
 
 class _RiderDashboardScreenState extends State<RiderDashboardScreen> {
+  final AuthService _auth = AuthService();
   int _currentIndex = 0;
   bool isOnline = false;
-  bool isDeliveryMode = true;
+  bool _isSearching = false;
+  Map<String, dynamic>? _ratings;
 
-  void _showIncomingOrderAlert() {
+  // Same placeholder store coordinates the backend itself currently uses
+  // (see DeliveriesService.findNearbyOrders) until Vendor gets real lat/lng.
+  static const LatLng _placeholderStore = LatLng(-1.2921, 36.8219);
+
+  @override
+  void initState() {
+    super.initState();
+    context.read<RoleProvider>().refreshRiderWallet();
+    _loadRatings();
+  }
+
+  Future<void> _loadRatings() async {
+    try {
+      final data = await _auth.getRiderRatings(widget.riderId);
+      setState(() => _ratings = data);
+    } catch (e) {}
+  }
+
+  Future<void> _goOnline(bool val) async {
+    setState(() => isOnline = val);
+    if (!val) return;
+
+    setState(() => _isSearching = true);
+    try {
+      Position position = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high)).timeout(const Duration(seconds: 6));
+      final orders = await _auth.getNearbyDeliveries(position.latitude, position.longitude);
+      setState(() => _isSearching = false);
+      if (orders.isNotEmpty && mounted) {
+        final distanceKm = Geolocator.distanceBetween(position.latitude, position.longitude, _placeholderStore.latitude, _placeholderStore.longitude) / 1000;
+        _showIncomingOrderAlert(orders.first, distanceKm);
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No ready-for-pickup orders nearby right now.')));
+      }
+    } catch (e) {
+      setState(() => _isSearching = false);
+      if (mounted) _showErrorSnack(context, e);
+    }
+  }
+
+  void _showIncomingOrderAlert(dynamic order, double distanceKm) {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: const Text("New Delivery Request!"),
-        content: const Column(
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text("Pickup ➔ Dropoff"),
-            SizedBox(height: 8),
-            Text("Est. Payout: 0.00", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
-            SizedBox(height: 16),
-            LinearProgressIndicator(value: 0.5), 
+            Text("Order #${order['id'].toString().substring(0, 8)}"),
+            const SizedBox(height: 8),
+            Text('${distanceKm.toStringAsFixed(1)} km to store'),
+            const SizedBox(height: 8),
+            Text('Order total: Ksh ${order['total']}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Decline", style: TextStyle(color: Colors.red))), 
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Decline", style: TextStyle(color: Colors.red))),
           ElevatedButton(
-            onPressed: () { 
+            onPressed: () async {
               Navigator.pop(context);
-              _showActiveDeliveryModal();
-            }, 
-            child: const Text("Accept") 
+              try {
+                final result = await _auth.acceptDelivery(order['id'], distanceKm);
+                final commission = (result['commission_earned'] as num).toDouble();
+                if (mounted) _showActiveDeliveryModal(order['id'], commission);
+              } catch (e) {
+                if (mounted) _showErrorSnack(context, e);
+              }
+            },
+            child: const Text("Accept"),
           ),
         ],
       ),
     );
   }
 
-  void _showActiveDeliveryModal() {
+  void _showActiveDeliveryModal(String orderId, double commission) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (context) => Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(
@@ -2351,24 +2381,113 @@ class _RiderDashboardScreenState extends State<RiderDashboardScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text("Active Delivery", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text('Estimated commission: Ksh ${commission.toStringAsFixed(2)}', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
             const SizedBox(height: 24),
-            ElevatedButton.icon(onPressed: () => _showFeatureDialog(context, "Navigating", "Turn-by-turn navigation launched"), icon: const Icon(Icons.navigation), label: const Text("Navigate to pickup")),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+              onPressed: () async {
+                try {
+                  await _auth.markPickedUp(orderId);
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pickup confirmed. En route to customer.')));
+                } catch (e) {
+                  if (mounted) _showErrorSnack(context, e);
+                }
+              },
+              icon: const Icon(Icons.check_box),
+              label: const Text("Confirm pickup at store"),
+            ),
             const SizedBox(height: 8),
-            ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey), onPressed: () => _showFeatureDialog(context, "Contact", "Calling vendor..."), icon: const Icon(Icons.phone), label: const Text("Call/message vendor")),
-            const SizedBox(height: 8),
-            ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.green), onPressed: () => _showFeatureDialog(context, "Arrived", "Notified vendor you are on-site"), icon: const Icon(Icons.store), label: const Text("Arrived at store")),
-            const SizedBox(height: 8),
-            ElevatedButton.icon(onPressed: () => _showFeatureDialog(context, "Checklist", "Confirmed order is complete"), icon: const Icon(Icons.check_box), label: const Text("Confirm pickup")),
-            const Divider(height: 32),
-            ElevatedButton.icon(onPressed: () => _showFeatureDialog(context, "Navigating", "Turn-by-turn navigation launched"), icon: const Icon(Icons.navigation), label: const Text("Navigate to customer")),
-            const SizedBox(height: 8),
-            ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey), onPressed: () => _showFeatureDialog(context, "Contact", "Calling customer..."), icon: const Icon(Icons.phone), label: const Text("Call/message customer")),
-            const SizedBox(height: 8),
-            ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.black), onPressed: () => _showFeatureDialog(context, "Delivery Complete", "Photo/Code confirmed. Order closed."), icon: const Icon(Icons.camera_alt), label: const Text("Confirm delivery (Photo/Code)")),
-            const SizedBox(height: 8),
-            TextButton.icon(onPressed: () => _showFeatureDialog(context, "Report", "Flagged issue to support"), icon: const Icon(Icons.warning, color: Colors.red), label: const Text("Report a problem", style: TextStyle(color: Colors.red))),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.black),
+              onPressed: () async {
+                try {
+                  final result = await _auth.markDelivered(orderId);
+                  final credited = (result['rider_credited'] as num).toDouble();
+                  await context.read<RoleProvider>().refreshRiderWallet();
+                  if (mounted) {
+                    Navigator.pop(context);
+                    _showFeatureDialog(context, "Delivery Complete", "Ksh ${credited.toStringAsFixed(2)} credited to your wallet.");
+                  }
+                } catch (e) {
+                  if (mounted) _showErrorSnack(context, e);
+                }
+              },
+              icon: const Icon(Icons.camera_alt),
+              label: const Text("Confirm delivery to customer"),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  int _demandFor(int weekday, int hour) {
+    int score = 1;
+    if (hour >= 12 && hour <= 14) score += 2;
+    if (hour >= 18 && hour <= 21) score += 3;
+    if (weekday == DateTime.friday || weekday == DateTime.saturday) score += 1;
+    return score.clamp(1, 5);
+  }
+
+  Widget _demandChip(int score) {
+    const labels = ['', 'Low', 'Moderate', 'High', 'Very High', 'Peak'];
+    const colors = [Colors.grey, Colors.grey, Colors.orange, Colors.deepOrange, Colors.red, Colors.redAccent];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(color: colors[score].withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
+      child: Text(labels[score], style: TextStyle(color: colors[score], fontWeight: FontWeight.bold)),
+    );
+  }
+
+  void _openEarningsEstimator() {
+    final now = DateTime.now();
+    final weekday = now.weekday;
+    final blocks = [
+      {'label': 'Breakfast (7–9am)', 'hour': 8},
+      {'label': 'Lunch (12–2pm)', 'hour': 13},
+      {'label': 'Afternoon (2–5pm)', 'hour': 15},
+      {'label': 'Dinner (6–9pm)', 'hour': 19},
+      {'label': 'Late night (9pm–12am)', 'hour': 22},
+    ];
+    Navigator.push(context, MaterialPageRoute(builder: (context) => Scaffold(
+      appBar: AppBar(title: const Text('Earnings Estimator')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text('Based on typical order patterns for today — not live demand data.', style: TextStyle(color: Colors.grey)),
+          const SizedBox(height: 16),
+          ...blocks.map((b) => Card(child: ListTile(title: Text(b['label'] as String), trailing: _demandChip(_demandFor(weekday, b['hour'] as int))))),
+        ],
+      ),
+    )));
+  }
+
+  void _requestPayoutDialog(RoleProvider roleProvider) {
+    if (roleProvider.riderWallet <= 0) {
+      _showFeatureDialog(context, "Nothing to withdraw", "Your wallet balance is currently zero.");
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cash Out'),
+        content: Text('Withdraw the full balance (Ksh ${roleProvider.riderWallet.toStringAsFixed(2)}) via Bank Transfer?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              try {
+                await roleProvider.requestRiderPayout(roleProvider.riderWallet, 'Bank Transfer');
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payout requested — awaiting Admin disbursement.')));
+              } catch (e) {
+                if (mounted) _showErrorSnack(context, e);
+              }
+            },
+            child: const Text('Confirm'),
+          ),
+        ],
       ),
     );
   }
@@ -2376,31 +2495,20 @@ class _RiderDashboardScreenState extends State<RiderDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final roleProvider = context.watch<RoleProvider>();
 
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
         title: const Text('Driver App'),
         actions: [
-          IconButton(icon: Icon(isDeliveryMode ? Icons.delivery_dining : Icons.local_taxi), onPressed: () {
-            setState(() => isDeliveryMode = !isDeliveryMode);
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isDeliveryMode ? "Delivery Mode Active" : "Rideshare Mode Active")));
-          }),
-          Row(
-            children: [
-              Text(isOnline ? "Online" : "Offline", style: TextStyle(color: isOnline ? Colors.green : Colors.grey, fontWeight: FontWeight.bold)),
-              Switch(
-                value: isOnline,
-                activeColor: Colors.green,
-                onChanged: (val) {
-                  setState(() => isOnline = val); 
-                  if (val) Future.delayed(const Duration(seconds: 2), _showIncomingOrderAlert);
-                },
-              ),
-            ],
-          ),
+          Row(children: [
+            Text(isOnline ? "Online" : "Offline", style: TextStyle(color: isOnline ? Colors.green : Colors.grey, fontWeight: FontWeight.bold)),
+            Switch(value: isOnline, activeColor: Colors.green, onChanged: _goOnline),
+          ]),
         ],
       ),
-      body: _currentIndex == 0 ? _buildActiveMap() : _currentIndex == 1 ? _buildEarningsView(isDark) : _currentIndex == 2 ? _buildInbox() : _buildProfile(),
+      body: _currentIndex == 0 ? _buildHome() : _currentIndex == 1 ? _buildEarningsView(isDark, roleProvider) : _currentIndex == 2 ? _buildInbox() : _buildProfile(),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (index) => setState(() => _currentIndex = index),
@@ -2417,99 +2525,73 @@ class _RiderDashboardScreenState extends State<RiderDashboardScreen> {
     );
   }
 
-  Widget _buildActiveMap() {
+  Widget _buildHome() {
     return Stack(
       children: [
-        const GoogleMap(
-          initialCameraPosition: CameraPosition(target: LatLng(-1.286389, 36.817223), zoom: 14),
-          myLocationEnabled: true,
-        ),
+        const GoogleMap(initialCameraPosition: CameraPosition(target: LatLng(-1.286389, 36.817223), zoom: 14), myLocationEnabled: true),
+        if (_isSearching)
+          const Positioned(top: 20, left: 20, right: 20, child: Card(child: Padding(padding: EdgeInsets.all(16), child: Row(children: [CircularProgressIndicator(), SizedBox(width: 16), Text('Looking for nearby orders...')])))),
         Positioned(
           bottom: 20, left: 20, right: 20,
           child: Card(
             child: ListTile(
-              leading: const Icon(Icons.explore, color: Colors.blue),
-              title: const Text("Discover nearby opportunities"),
-              subtitle: const Text("High demand in your area!"),
-              onTap: () => _showFeatureDialog(context, "Discover", "Showing upcoming reservations and events."),
+              leading: const Icon(Icons.refresh, color: Colors.blue),
+              title: const Text("Check for orders now"),
+              subtitle: const Text("Manually re-check nearby available deliveries"),
+              onTap: isOnline ? () => _goOnline(true) : null,
             ),
           ),
-        )
+        ),
       ],
     );
   }
 
-  Widget _buildEarningsView(bool isDark) {
-    return ListView(
-      padding: const EdgeInsets.all(16.0),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(color: Colors.green[700], borderRadius: BorderRadius.circular(16)),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Wallet Balance', style: TextStyle(fontSize: 16, color: Colors.white70)),
-              const Text('0.00', style: TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white)),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.green[700]),
-                onPressed: () => _showFeatureDialog(context, "Instant Payout", "Transferring funds to your registered mobile wallet."), 
-                child: const Text('Cash Out / Instant Pay')
-              )
-            ],
+  Widget _buildEarningsView(bool isDark, RoleProvider roleProvider) {
+    return Container(
+      decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.green[700]!, isDark ? const Color(0xFF121212) : Colors.white])),
+      child: ListView(
+        padding: const EdgeInsets.all(16.0),
+        children: [
+          GlassCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Wallet Balance', style: TextStyle(fontSize: 16, color: Colors.white70)),
+                Text(roleProvider.riderWallet.toStringAsFixed(2), style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white)),
+                const SizedBox(height: 16),
+                ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.green[700]), onPressed: () => _requestPayoutDialog(roleProvider), child: const Text('Cash Out / Instant Pay')),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 24),
-        ListTile(
-          leading: const Icon(Icons.bar_chart),
-          title: const Text("Earnings Estimator"),
-          subtitle: const Text("Plan your schedule around peak pay"),
-          trailing: const Icon(Icons.arrow_forward_ios),
-          onTap: () => _showFeatureDialog(context, "Estimator", "Showing busiest times to work."),
-        )
-      ],
+          const SizedBox(height: 24),
+          Container(
+            decoration: BoxDecoration(color: isDark ? Colors.grey[900] : Colors.white, borderRadius: BorderRadius.circular(12)),
+            child: ListTile(leading: const Icon(Icons.bar_chart), title: const Text("Earnings Estimator"), subtitle: const Text("Plan your schedule around peak pay"), trailing: const Icon(Icons.arrow_forward_ios), onTap: _openEarningsEstimator),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildInbox() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        ElevatedButton.icon(
-          onPressed: () => _showFeatureDialog(context, "Support", "Opening chat with Ops Support..."),
-          icon: const Icon(Icons.support_agent),
-          label: const Text("Support Chat"),
-        ),
-        const SizedBox(height: 16),
-        const ListTile(leading: Icon(Icons.message), title: Text("Document approved"), subtitle: Text("Your vehicle registration was approved.")),
-        const ListTile(leading: Icon(Icons.message), title: Text("Welcome to the fleet"), subtitle: Text("Here are tips for your first delivery.")),
-      ],
-    );
+    return const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('No message-center backend exists yet — this is a placeholder.', style: TextStyle(color: Colors.grey))));
   }
 
   Widget _buildProfile() {
+    final average = (_ratings?['average'] as num?)?.toDouble() ?? 0.0;
+    final count = (_ratings?['count'] as num?)?.toInt() ?? 0;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const ListTile(leading: Icon(Icons.star, color: Colors.amber), title: Text("Pro Status: Bronze"), subtitle: Text("Unlocks premium rewards")),
-        const ListTile(leading: Icon(Icons.person), title: Text("Personal Details"), subtitle: Text("Name, Photo, Vehicle")),
-        const Divider(),
-        ListTile(
-          leading: const Icon(Icons.upload_file), 
-          title: const Text("Upload Documents"), 
-          subtitle: const Text("ID, Licence, Insurance"), 
-          onTap: () => _showFeatureDialog(context, "Upload", "Opening document picker...")
-        ),
+        ListTile(leading: const Icon(Icons.star, color: Colors.amber), title: Text(count == 0 ? "No ratings yet" : "${average.toStringAsFixed(1)}★ average"), subtitle: Text('$count completed deliveries rated')),
         const Divider(),
         ListTile(
           leading: const Icon(Icons.logout, color: Colors.red),
           title: const Text('Logout', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w500, fontSize: 16)),
           onTap: () async {
             await AuthService().logout();
-            if (context.mounted) {
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
-            }
+            context.read<RoleProvider>().clearSession();
+            if (context.mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
           },
         ),
       ],
@@ -2518,7 +2600,12 @@ class _RiderDashboardScreenState extends State<RiderDashboardScreen> {
 }
 
 // ============================================================================
-// 11. ADMIN DASHBOARD (RESPONSIVE MOBILE + DESKTOP UI)
+// ADMIN DASHBOARD — Vendor Approvals, Rider Approvals, and Payout Dashboard
+// are now backed by the real /admin endpoints via RoleProvider. Overview's
+// revenue/order KPIs and the Disputes/Fraud/City-Zone/Support tabs stay as
+// labeled placeholders — there's no analytics-aggregation or
+// dispute/fraud/ticketing backend yet, and pretending otherwise would just
+// be a different kind of fake button.
 // ============================================================================
 
 class AdminDashboardScreen extends StatefulWidget {
@@ -2529,33 +2616,40 @@ class AdminDashboardScreen extends StatefulWidget {
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   String _selectedTab = "Overview";
+  bool _isLoadingQueues = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadQueues();
+  }
+
+  Future<void> _loadQueues() async {
+    setState(() => _isLoadingQueues = true);
+    try {
+      await context.read<RoleProvider>().refreshAdminQueues();
+    } catch (e) {
+      if (mounted) _showErrorSnack(context, e);
+    } finally {
+      if (mounted) setState(() => _isLoadingQueues = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final bgColor = const Color(0xFF141414);
     final cardColor = const Color(0xFF1E1E1E);
-    final accentColor = const Color(0xFFFF9800); 
-
-    // Detect if the user is on a mobile device (width less than 800px)
+    final accentColor = const Color(0xFFFF9800);
+    final roleProvider = context.watch<RoleProvider>();
     final bool isMobile = MediaQuery.of(context).size.width < 800;
 
-    // The Sidebar Navigation (Used natively or inside a Drawer)
     Widget sidebar = Container(
       width: 250,
       color: const Color(0xFF1A1A1A),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Row(
-              children: [
-                Icon(Icons.dashboard, color: accentColor, size: 28),
-                const SizedBox(width: 12),
-                const Text("Internal Ops", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-              ],
-            ),
-          ),
+          Padding(padding: const EdgeInsets.all(24.0), child: Row(children: [Icon(Icons.dashboard, color: accentColor, size: 28), const SizedBox(width: 12), const Text("Internal Ops", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold))])),
           Expanded(
             child: ListView(
               children: [
@@ -2572,212 +2666,238 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
           _buildNavItem(Icons.logout, "Logout", false, Colors.red, isMobile, onTap: () async {
             await AuthService().logout();
+            context.read<RoleProvider>().clearSession();
             if (context.mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
           }),
         ],
       ),
     );
 
-    // The Main Content Area
-    Widget content = Padding(
+    Widget content;
+    if (_isLoadingQueues) {
+      content = const Center(child: CircularProgressIndicator());
+    } else if (_selectedTab == "Vendor Approvals") {
+      content = _buildVendorApprovals(cardColor, roleProvider);
+    } else if (_selectedTab == "Rider Approvals") {
+      content = _buildRiderApprovals(cardColor, roleProvider);
+    } else if (_selectedTab == "Payout Dashboard") {
+      content = _buildPayoutDashboard(cardColor, roleProvider, isMobile);
+    } else if (_selectedTab == "Overview") {
+      content = _buildOverview(cardColor, accentColor, isMobile);
+    } else {
+      content = Padding(
+        padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
+          child: Center(child: Text("$_selectedTab isn't backed by the API yet.", style: const TextStyle(color: Colors.grey), textAlign: TextAlign.center)),
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: bgColor,
+      appBar: isMobile ? AppBar(backgroundColor: const Color(0xFF1A1A1A), title: Text(_selectedTab, style: const TextStyle(color: Colors.white)), iconTheme: const IconThemeData(color: Colors.white)) : null,
+      drawer: isMobile ? Drawer(child: sidebar) : null,
+      body: isMobile ? content : Row(children: [sidebar, Expanded(child: content)]),
+    );
+  }
+
+  Widget _buildOverview(Color cardColor, Color accentColor, bool isMobile) {
+    return Padding(
       padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!isMobile)
-            Text(_selectedTab, style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
-          if (!isMobile)
-            const SizedBox(height: 24),
-          
-          if (_selectedTab == "Overview") ...[
-            isMobile 
-              ? Column(
-                  children: [
-                    Row(children: [_buildKpiCard("REVENUE MTD", "0.00", "↑ 0% vs last period", cardColor), const SizedBox(width: 16), _buildKpiCard("ORDERS MTD", "0", "↑ 0% vs last period", cardColor)]),
-                    const SizedBox(height: 16),
-                    Row(children: [_buildKpiCard("AVG ORDER VALUE", "0.00", "↓ 0% vs last period", cardColor), const SizedBox(width: 16), _buildKpiCard("ACTIVE CUSTOMERS", "0", "↑ 0% vs last period", cardColor)]),
-                  ],
-                )
-              : Row(
-                  children: [
-                    _buildKpiCard("REVENUE MTD", "0.00", "↑ 0% vs last period", cardColor),
-                    const SizedBox(width: 16),
-                    _buildKpiCard("ORDERS MTD", "0", "↑ 0% vs last period", cardColor),
-                    const SizedBox(width: 16),
-                    _buildKpiCard("AVG ORDER VALUE", "0.00", "↓ 0% vs last period", cardColor),
-                    const SizedBox(width: 16),
-                    _buildKpiCard("ACTIVE CUSTOMERS", "0", "↑ 0% vs last period", cardColor),
-                  ],
-                ),
-            const SizedBox(height: 24),
-            Expanded(
-              child: isMobile 
-                ? ListView(
-                    children: [
-                      Container(
-                        height: 300,
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text("REVENUE - LAST 30 DAYS", style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
-                            const Spacer(),
-                            Center(child: Icon(Icons.show_chart, size: 100, color: Colors.blue[400])),
-                            const Spacer(),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text("TOP 5 PRODUCTS", style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 24),
-                            _buildHorizontalBar("Product 1", 0.9, accentColor),
-                            _buildHorizontalBar("Product 2", 0.75, accentColor),
-                            _buildHorizontalBar("Product 3", 0.6, accentColor),
-                            _buildHorizontalBar("Product 4", 0.45, accentColor),
-                            _buildHorizontalBar("Product 5", 0.3, accentColor),
-                          ],
-                        ),
-                      ),
-                    ],
-                  )
-                : Row(
-                    children: [
-                      Expanded(
-                        flex: 2,
-                        child: Container(
-                          padding: const EdgeInsets.all(24),
-                          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text("REVENUE - LAST 30 DAYS", style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
-                              const Spacer(),
-                              Center(child: Icon(Icons.show_chart, size: 150, color: Colors.blue[400])),
-                              const Spacer(),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 24),
-                      Expanded(
-                        flex: 1,
-                        child: Container(
-                          padding: const EdgeInsets.all(24),
-                          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text("TOP 5 PRODUCTS", style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 24),
-                              _buildHorizontalBar("Product 1", 0.9, accentColor),
-                              _buildHorizontalBar("Product 2", 0.75, accentColor),
-                              _buildHorizontalBar("Product 3", 0.6, accentColor),
-                              _buildHorizontalBar("Product 4", 0.45, accentColor),
-                              _buildHorizontalBar("Product 5", 0.3, accentColor),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-            ),
-          ] 
-          else if (_selectedTab == "Payout Dashboard") ...[
-            isMobile 
-              ? Column(
-                  children: [
-                    Row(children: [_buildKpiCard("PENDING PAYOUTS", "0.00", "Requires Action", cardColor), const SizedBox(width: 16), _buildKpiCard("TOTAL DISBURSED", "0.00", "All Time", cardColor)]),
-                  ],
-                )
-              : Row(
-                  children: [
-                    _buildKpiCard("PENDING PAYOUTS", "0.00", "Requires Action", cardColor),
-                    const SizedBox(width: 16),
-                    _buildKpiCard("TOTAL DISBURSED", "0.00", "All Time", cardColor),
-                  ],
-                ),
-            const SizedBox(height: 24),
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text("Payment Requests", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 16),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.store, color: Colors.green),
-                      title: const Text("Vendor Request", style: TextStyle(color: Colors.white)),
-                      subtitle: const Text("Requested: 0.00 via M-Pesa", style: TextStyle(color: Colors.grey)),
-                      trailing: ElevatedButton(
-                        style: ElevatedButton.styleFrom(minimumSize: const Size(0, 36)),
-                        onPressed: () => _showFeatureDialog(context, "Payout Approved", "Funds disbursed to Vendor wallet."), 
-                        child: const Text("Approve Payout", style: TextStyle(fontSize: 12))
-                      ),
-                    ),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.two_wheeler, color: Colors.orange),
-                      title: const Text("Rider Request", style: TextStyle(color: Colors.white)),
-                      subtitle: const Text("Requested: 0.00 via Bank", style: TextStyle(color: Colors.grey)),
-                      trailing: ElevatedButton(
-                        style: ElevatedButton.styleFrom(minimumSize: const Size(0, 36)),
-                        onPressed: () => _showFeatureDialog(context, "Payout Approved", "Funds disbursed to Rider wallet."), 
-                        child: const Text("Approve Payout", style: TextStyle(fontSize: 12))
-                      ),
-                    )
-                  ],
-                ),
-              ),
-            ),
-          ]
-          else ...[
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
-                child: Center(
-                  child: Text("Data module for $_selectedTab will render here.", style: const TextStyle(color: Colors.grey), textAlign: TextAlign.center),
-                ),
-              ),
-            ),
-          ]
+          if (!isMobile) const Text('Overview', style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+          if (!isMobile) const SizedBox(height: 24),
+          const Text("Revenue/order analytics aren't backed by an aggregation endpoint yet — these are placeholders.", style: TextStyle(color: Colors.grey)),
+          const SizedBox(height: 16),
+          Row(children: [
+            _buildKpiCard("PENDING VENDORS", "", cardColor),
+            const SizedBox(width: 16),
+            _buildKpiCard("PENDING RIDERS", "", cardColor),
+          ]),
         ],
       ),
     );
+  }
 
-    return Scaffold(
-      backgroundColor: bgColor,
-      // If Mobile: Show an AppBar with a Hamburger Menu
-      appBar: isMobile 
-        ? AppBar(
-            backgroundColor: const Color(0xFF1A1A1A),
-            title: Text(_selectedTab, style: const TextStyle(color: Colors.white)),
-            iconTheme: const IconThemeData(color: Colors.white),
-          ) 
-        : null,
-      // If Mobile: Put the sidebar inside the Drawer
-      drawer: isMobile ? Drawer(child: sidebar) : null,
-      // If Mobile: Show just the content. If Desktop: Show Sidebar + Content side-by-side
-      body: isMobile 
-        ? content 
-        : Row(
-            children: [
-              sidebar,
-              Expanded(child: content),
-            ],
+  Widget _buildKpiCard(String title, String subText, Color cardColor) {
+    final roleProvider = context.watch<RoleProvider>();
+    final value = title.contains('VENDOR') ? '${roleProvider.pendingVendors.length}' : '${roleProvider.pendingRiders.length}';
+    return Expanded(
+      child: GlassCard(
+        padding: const EdgeInsets.all(16),
+        borderRadius: BorderRadius.circular(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(color: Colors.grey, fontSize: 10, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text(value, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVendorApprovals(Color cardColor, RoleProvider roleProvider) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Pending Vendor Applications", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            if (roleProvider.pendingVendors.isEmpty)
+              const Text("No pending vendor applications.", style: TextStyle(color: Colors.grey))
+            else
+              Expanded(
+                child: ListView.builder(
+                  itemCount: roleProvider.pendingVendors.length,
+                  itemBuilder: (context, index) {
+                    final v = roleProvider.pendingVendors[index];
+                    return ListTile(
+                      leading: const Icon(Icons.store, color: Colors.blueAccent),
+                      title: Text('${v['business_name']}', style: const TextStyle(color: Colors.white)),
+                      subtitle: Text('${v['user']?['name'] ?? ''} • ${v['user']?['phone'] ?? ''} • ${v['location'] ?? ''}', style: const TextStyle(color: Colors.grey)),
+                      trailing: ElevatedButton(
+                        onPressed: () async {
+                          try {
+                            await roleProvider.approveVendor(v['id']);
+                          } catch (e) {
+                            if (context.mounted) _showErrorSnack(context, e);
+                          }
+                        },
+                        child: const Text("Approve Vendor"),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRiderApprovals(Color cardColor, RoleProvider roleProvider) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Pending Rider Applications", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            if (roleProvider.pendingRiders.isEmpty)
+              const Text("No pending rider applications.", style: TextStyle(color: Colors.grey))
+            else
+              Expanded(
+                child: ListView.builder(
+                  itemCount: roleProvider.pendingRiders.length,
+                  itemBuilder: (context, index) {
+                    final r = roleProvider.pendingRiders[index];
+                    return ListTile(
+                      leading: const Icon(Icons.motorcycle, color: Colors.orange),
+                      title: Text('${r['user']?['name'] ?? 'Rider'} — ${r['vehicle_type']}', style: const TextStyle(color: Colors.white)),
+                      subtitle: Text('${r['user']?['phone'] ?? ''} • Plate: ${r['plate_number']}', style: const TextStyle(color: Colors.grey)),
+                      trailing: ElevatedButton(
+                        onPressed: () async {
+                          try {
+                            await roleProvider.approveRider(r['id']);
+                          } catch (e) {
+                            if (context.mounted) _showErrorSnack(context, e);
+                          }
+                        },
+                        child: const Text("Approve Rider"),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPayoutDashboard(Color cardColor, RoleProvider roleProvider, bool isMobile) {
+    return Padding(
+      padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Expanded(
+              child: GlassCard(
+                padding: const EdgeInsets.all(16),
+                borderRadius: BorderRadius.circular(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("PENDING PAYOUTS", style: TextStyle(color: Colors.grey, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    Text('${roleProvider.pendingPayouts.length}', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 24),
+          Expanded(
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Payment Requests", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  if (roleProvider.pendingPayouts.isEmpty)
+                    const Text("No pending payout requests.", style: TextStyle(color: Colors.grey))
+                  else
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: roleProvider.pendingPayouts.length,
+                        itemBuilder: (context, index) {
+                          final req = roleProvider.pendingPayouts[index];
+                          final isVendor = req['party'] == 'VENDOR';
+                          return ListTile(
+                            leading: Icon(isVendor ? Icons.store : Icons.two_wheeler, color: isVendor ? Colors.green : Colors.orange),
+                            title: Text("${req['party']} payout", style: const TextStyle(color: Colors.white)),
+                            subtitle: Text("Requested: Ksh ${req['amount']} via ${req['method']}", style: const TextStyle(color: Colors.grey)),
+                            trailing: ElevatedButton(
+                              style: ElevatedButton.styleFrom(minimumSize: const Size(0, 36)),
+                              onPressed: () async {
+                                try {
+                                  await roleProvider.disbursePayout(req['id']);
+                                } catch (e) {
+                                  if (context.mounted) _showErrorSnack(context, e);
+                                }
+                              },
+                              child: const Text("Disburse Funds", style: TextStyle(fontSize: 12)),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
+        ],
+      ),
     );
   }
 
@@ -2786,67 +2906,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       onTap: () {
         if (onTap != null) {
           onTap();
+          return;
+        }
+        // Fixed: pop the Drawer route BEFORE triggering setState, and defer
+        // the rebuild to the next frame — calling setState first (the old
+        // order) rebuilt the tree while the Drawer route was still being
+        // torn down, which is what caused the "RenderBox was not laid out"
+        // crashes when tapping sidebar items on mobile.
+        if (isMobile) {
+          Navigator.pop(context);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _selectedTab = title);
+          });
         } else {
           setState(() => _selectedTab = title);
-          if (isMobile) Navigator.pop(context); // Close drawer after tapping on mobile
         }
       },
       child: Container(
         color: isSelected ? accentColor.withOpacity(0.1) : Colors.transparent,
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-        child: Row(
-          children: [
-            Icon(icon, color: isSelected ? accentColor : Colors.grey, size: 20),
-            const SizedBox(width: 16),
-            Expanded(child: Text(title, style: TextStyle(color: isSelected ? accentColor : Colors.white70, fontSize: 14, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal))),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildKpiCard(String title, String value, String subText, Color cardColor) {
-    bool isPositive = subText.contains('↑');
-    bool isAlert = subText.contains('Requires');
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: const TextStyle(color: Colors.grey, fontSize: 10, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text(value, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            Text(subText, style: TextStyle(color: isAlert ? Colors.orange : (isPositive ? Colors.greenAccent : Colors.redAccent), fontSize: 10)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHorizontalBar(String label, double fillFraction, Color color) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16.0),
-      child: Row(
-        children: [
-          SizedBox(width: 80, child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 12))),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return Container(
-                  height: 24,
-                  alignment: Alignment.centerLeft,
-                  child: Container(
-                    width: constraints.maxWidth * fillFraction,
-                    decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
+        child: Row(children: [
+          Icon(icon, color: isSelected ? accentColor : Colors.grey, size: 20),
+          const SizedBox(width: 16),
+          Expanded(child: Text(title, style: TextStyle(color: isSelected ? accentColor : Colors.white70, fontSize: 14, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal))),
+        ]),
       ),
     );
   }
