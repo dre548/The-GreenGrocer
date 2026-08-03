@@ -57,6 +57,13 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            // 1. ADD YOUR LOGO HERE:
+            Image.asset('assets/images/logo.png', height: 100),
+            
+            // 2. ADD A LITTLE SPACING BELOW IT:
+            SizedBox(height: 30), 
+
+            // Your existing text fields continue below...
             TextField(
               controller: _phoneController,
               decoration: InputDecoration(
@@ -96,4 +103,3 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
-}

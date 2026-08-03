@@ -13,6 +13,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'services/auth_service.dart';
+import 'package:flutter/foundation.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -116,7 +117,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     super.dispose();
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
@@ -145,7 +146,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                       borderRadius: BorderRadius.circular(24),
                       boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 8))],
                     ),
-                    child: const Center(child: Text('🥬', style: TextStyle(fontSize: 48))),
+                    // 👇 This is the only line that changed 👇
+                    child: Center(child: Image.asset('assets/images/logo.png', width: 70, height: 70)),
                   ),
                   const SizedBox(height: 20),
                   const Text('The Greengrocer', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
@@ -511,19 +513,23 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
               const SizedBox(height: 48),
-              Divider(color: isDark ? Colors.grey[800] : Colors.grey[300]),
-              const SizedBox(height: 12),
-              Text('Quick test accounts (dev only)', style: TextStyle(color: Colors.grey[500], fontSize: 12, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(child: OutlinedButton(onPressed: () => _quickLogin('ADMIN_SYSTEM'), child: const Text('Admin'))),
-                  const SizedBox(width: 8),
-                  Expanded(child: OutlinedButton(onPressed: () => _quickLogin('VENDOR_SYSTEM'), child: const Text('Vendor'))),
-                  const SizedBox(width: 8),
-                  Expanded(child: OutlinedButton(onPressed: () => _quickLogin('RIDER_SYSTEM'), child: const Text('Rider'))),
-                ],
-              ),
+              
+              // 👇 The test accounts are now safely hidden in production 👇
+              if (kDebugMode) ...[
+                Divider(color: isDark ? Colors.grey[800] : Colors.grey[300]),
+                const SizedBox(height: 12),
+                Text('Quick test accounts (dev only)', style: TextStyle(color: Colors.grey[500], fontSize: 12, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(child: OutlinedButton(onPressed: () => _quickLogin('ADMIN_SYSTEM'), child: const Text('Admin'))),
+                    const SizedBox(width: 8),
+                    Expanded(child: OutlinedButton(onPressed: () => _quickLogin('VENDOR_SYSTEM'), child: const Text('Vendor'))),
+                    const SizedBox(width: 8),
+                    Expanded(child: OutlinedButton(onPressed: () => _quickLogin('RIDER_SYSTEM'), child: const Text('Rider'))),
+                  ],
+                ),
+              ],
             ],
           ),
         ),

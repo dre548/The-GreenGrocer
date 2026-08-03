@@ -18,6 +18,3 @@ services:
 
 volumes:
   postgres_data:
-
-assets:
-  - .env
