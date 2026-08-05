@@ -1,0 +1,2302 @@
+diff --git a/backend/package.json b/backend/package.json
+index 8d6513a..3f7262e 100644
+--- a/backend/package.json
++++ b/backend/package.json
+@@ -29,6 +29,7 @@
+     "@nestjs/platform-express": "^11.0.1",
+     "@nestjs/platform-socket.io": "^11.1.28",
+     "@nestjs/websockets": "^11.1.28",
++    "multer": "^1.4.5-lts.1",
+     "@prisma/adapter-pg": "^7.8.0",
+     "@prisma/client": "^7.8.0",
+     "axios": "^1.18.1",
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index 85ba040..048f74b 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -53,16 +53,42 @@ enum RatingTarget {
+   RIDER
+ }
+ 
++enum DisputeStatus {
++  OPEN
++  INVESTIGATING
++  RESOLVED
++  REJECTED
++}
++
++enum FraudSeverity {
++  LOW
++  MEDIUM
++  HIGH
++}
++
++enum SupportTicketStatus {
++  OPEN
++  IN_PROGRESS
++  CLOSED
++}
++
+ model User {
+-  id         String   @id @default(uuid())
+-  phone      String   @unique
+-  name       String
+-  role       UserRole @default(CUSTOMER)
+-  created_at DateTime @default(now())
++  id                  String   @id @default(uuid())
++  phone               String   @unique
++  name                String
++  role                UserRole @default(CUSTOMER)
++  cash_wallet_balance Float    @default(0)
++  created_at          DateTime @default(now())
+ 
+-  vendorProfile Vendor?
+-  riderProfile  Rider?
+-  orders        Order[]
++  vendorProfile   Vendor?
++  riderProfile    Rider?
++  orders          Order[]
++  disputesRaised  Dispute[]
++  supportTickets  SupportTicket[]
++  favorites       FavoriteVendor[]
++  chatMessages    ChatMessage[]
++  familyAsOwner   FamilyMember[] @relation("FamilyOwner")
++  familyAsMember  FamilyMember[] @relation("FamilyMember")
+ }
+ 
+ model Vendor {
+@@ -127,6 +153,8 @@ model Order {
+   rider          Rider?      @relation(fields: [rider_id], references: [id])
+   transactions   Transaction[]
+   ratings        Rating[]
++  disputes       Dispute[]
++  chatMessages   ChatMessage[]
+ }
+ 
+ // Ledger of money movement: order charges, vendor/rider payouts, refunds,
+@@ -157,3 +185,102 @@ model Rating {
+ 
+   order      Order        @relation(fields: [order_id], references: [id])
+ }
++
++// --- Admin: Disputes/Refunds tab ---
++model Dispute {
++  id         String        @id @default(uuid())
++  order_id   String
++  raised_by  String        // user.id of whoever filed it
++  reason     String
++  status     DisputeStatus @default(OPEN)
++  resolution String?
++  created_at DateTime      @default(now())
++
++  order      Order         @relation(fields: [order_id], references: [id])
++  raiser     User          @relation(fields: [raised_by], references: [id])
++}
++
++// --- Admin: Fraud Flags tab ---
++model FraudFlag {
++  id         String        @id @default(uuid())
++  order_id   String?
++  user_id    String?
++  reason     String
++  severity   FraudSeverity @default(LOW)
++  resolved   Boolean       @default(false)
++  created_at DateTime      @default(now())
++}
++
++// --- Admin: City/Zone Config tab ---
++model ZoneConfig {
++  id                 String   @id @default(uuid())
++  city               String
++  zone_name          String
++  surge_multiplier   Float    @default(1.0)
++  delivery_radius_km Float    @default(5.0)
++  is_active          Boolean  @default(true)
++  created_at         DateTime @default(now())
++}
++
++// --- Admin: Support Queue tab ---
++model SupportTicket {
++  id         String              @id @default(uuid())
++  user_id    String
++  subject    String
++  message    String
++  status     SupportTicketStatus @default(OPEN)
++  created_at DateTime            @default(now())
++
++  user       User                @relation(fields: [user_id], references: [id])
++}
++
++// --- Customer: Favourites ---
++model FavoriteVendor {
++  id         String   @id @default(uuid())
++  user_id    String
++  vendor_id  String
++  created_at DateTime @default(now())
++
++  user       User     @relation(fields: [user_id], references: [id])
++
++  @@unique([user_id, vendor_id])
++}
++
++// --- Customer: Promotions/vouchers ---
++model Promotion {
++  id           String    @id @default(uuid())
++  code         String    @unique
++  description  String
++  discount_pct Float?
++  flat_amount  Float?
++  active       Boolean   @default(true)
++  expires_at   DateTime?
++  created_at   DateTime  @default(now())
++}
++
++// --- Customer: Family sharing ---
++model FamilyMember {
++  id             String   @id @default(uuid())
++  owner_id       String   // the paying/primary account
++  member_id      String   // the invited user
++  spending_limit Float?
++  created_at     DateTime @default(now())
++
++  owner          User     @relation("FamilyOwner", fields: [owner_id], references: [id])
++  member         User     @relation("FamilyMember", fields: [member_id], references: [id])
++
++  @@unique([owner_id, member_id])
++}
++
++// --- Message Center: order-scoped chat between customer/vendor/rider ---
++model ChatMessage {
++  id          String   @id @default(uuid())
++  order_id    String
++  sender_id   String
++  sender_role String   // "CUSTOMER" | "VENDOR" | "RIDER"
++  message     String
++  created_at  DateTime @default(now())
++
++  order       Order    @relation(fields: [order_id], references: [id])
++  sender      User     @relation(fields: [sender_id], references: [id])
++}
+diff --git a/backend/src/admin/admin.controller.ts b/backend/src/admin/admin.controller.ts
+index 215619a..42467b7 100644
+--- a/backend/src/admin/admin.controller.ts
++++ b/backend/src/admin/admin.controller.ts
+@@ -1,5 +1,6 @@
+-import { Controller, Get, Post, Param } from '@nestjs/common';
++import { Controller, Get, Post, Patch, Body, Param, UseGuards } from '@nestjs/common';
+ import { AdminService } from './admin.service';
++import { AuthGuard } from '../auth/auth.guard';
+ 
+ @Controller('admin')
+ export class AdminController {
+@@ -36,4 +37,68 @@ export class AdminController {
+   async disbursePayout(@Param('id') id: string) {
+     return this.adminService.disbursePayout(id);
+   }
+-}
+\ No newline at end of file
++
++  // --- Disputes/Refunds ---
++  @UseGuards(AuthGuard)
++  @Get('disputes')
++  getDisputes() {
++    return this.adminService.getDisputes();
++  }
++
++  @UseGuards(AuthGuard)
++  @Patch('disputes/:id/resolve')
++  resolveDispute(@Param('id') id: string, @Body() body: { status: 'RESOLVED' | 'REJECTED'; resolution: string }) {
++    return this.adminService.resolveDispute(id, body.status, body.resolution);
++  }
++
++  // --- Fraud Flags ---
++  @UseGuards(AuthGuard)
++  @Get('fraud-flags')
++  getFraudFlags() {
++    return this.adminService.getFraudFlags();
++  }
++
++  @UseGuards(AuthGuard)
++  @Patch('fraud-flags/:id/resolve')
++  resolveFraudFlag(@Param('id') id: string) {
++    return this.adminService.resolveFraudFlag(id);
++  }
++
++  // --- City/Zone Config ---
++  @Get('zones')
++  getZones() {
++    return this.adminService.getZones();
++  }
++
++  @UseGuards(AuthGuard)
++  @Post('zones')
++  createZone(@Body() body: { city: string; zone_name: string; surge_multiplier?: number; delivery_radius_km?: number }) {
++    return this.adminService.createZone(body);
++  }
++
++  @UseGuards(AuthGuard)
++  @Patch('zones/:id')
++  updateZone(@Param('id') id: string, @Body() body: any) {
++    return this.adminService.updateZone(id, body);
++  }
++
++  // --- Support Queue ---
++  @UseGuards(AuthGuard)
++  @Get('support-tickets')
++  getSupportTickets() {
++    return this.adminService.getSupportTickets();
++  }
++
++  @UseGuards(AuthGuard)
++  @Patch('support-tickets/:id')
++  updateSupportTicket(@Param('id') id: string, @Body() body: { status: 'IN_PROGRESS' | 'CLOSED' }) {
++    return this.adminService.updateSupportTicket(id, body.status);
++  }
++
++  // --- Revenue/Overview KPIs ---
++  @UseGuards(AuthGuard)
++  @Get('revenue-summary')
++  getRevenueSummary() {
++    return this.adminService.getRevenueSummary();
++  }
++}
+diff --git a/backend/src/admin/admin.service.ts b/backend/src/admin/admin.service.ts
+index 499f7c0..c97e368 100644
+--- a/backend/src/admin/admin.service.ts
++++ b/backend/src/admin/admin.service.ts
+@@ -63,4 +63,102 @@ export class AdminService {
+       data: { status: 'COMPLETED' },
+     });
+   }
++
++  // --- DISPUTES/REFUNDS ---
++  async getDisputes() {
++    return this.prisma.dispute.findMany({
++      orderBy: { created_at: 'desc' },
++      include: { order: true, raiser: true },
++    });
++  }
++
++  async resolveDispute(id: string, status: 'RESOLVED' | 'REJECTED', resolution: string) {
++    const dispute = await this.prisma.dispute.findUnique({ where: { id } });
++    if (!dispute) throw new NotFoundException('Dispute not found');
++
++    if (status === 'RESOLVED') {
++      // Resolving a dispute triggers a real refund transaction, same as a
++      // vendor-side order cancellation.
++      const order = await this.prisma.order.findUnique({ where: { id: dispute.order_id } });
++      if (order) {
++        await this.prisma.transaction.create({
++          data: {
++            order_id: order.id,
++            type: 'REFUND',
++            party: 'PLATFORM',
++            party_id: order.vendor_id,
++            amount: order.total,
++            method: order.payment_method,
++            status: 'PENDING',
++          },
++        });
++      }
++    }
++
++    return this.prisma.dispute.update({
++      where: { id },
++      data: { status, resolution },
++    });
++  }
++
++  // --- FRAUD FLAGS ---
++  async getFraudFlags() {
++    return this.prisma.fraudFlag.findMany({
++      where: { resolved: false },
++      orderBy: { created_at: 'desc' },
++    });
++  }
++
++  async resolveFraudFlag(id: string) {
++    return this.prisma.fraudFlag.update({ where: { id }, data: { resolved: true } });
++  }
++
++  // --- CITY/ZONE CONFIG ---
++  async getZones() {
++    return this.prisma.zoneConfig.findMany({ orderBy: { city: 'asc' } });
++  }
++
++  async createZone(data: { city: string; zone_name: string; surge_multiplier?: number; delivery_radius_km?: number }) {
++    return this.prisma.zoneConfig.create({ data });
++  }
++
++  async updateZone(id: string, data: any) {
++    return this.prisma.zoneConfig.update({ where: { id }, data });
++  }
++
++  // --- SUPPORT QUEUE ---
++  async getSupportTickets() {
++    return this.prisma.supportTicket.findMany({
++      where: { status: { not: 'CLOSED' } },
++      orderBy: { created_at: 'asc' },
++      include: { user: true },
++    });
++  }
++
++  async updateSupportTicket(id: string, status: 'IN_PROGRESS' | 'CLOSED') {
++    return this.prisma.supportTicket.update({ where: { id }, data: { status } });
++  }
++
++  // --- REVENUE / OVERVIEW KPIs ---
++  // Real aggregation from Order + Transaction — no invented numbers.
++  async getRevenueSummary() {
++    const now = new Date();
++    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
++
++    const ordersThisMonth = await this.prisma.order.findMany({
++      where: { created_at: { gte: startOfMonth }, status: { not: 'CANCELLED' } },
++    });
++
++    const revenueMtd = ordersThisMonth.reduce((sum, o) => sum + o.total, 0);
++    const ordersCount = ordersThisMonth.length;
++    const avgOrderValue = ordersCount > 0 ? revenueMtd / ordersCount : 0;
++    const activeCustomerIds = new Set(ordersThisMonth.map((o) => o.customer_id));
++
++    return {
++      revenue_mtd: revenueMtd,
++      orders_mtd: ordersCount,
++      avg_order_value: avgOrderValue,
++      active_customers: activeCustomerIds.size,
++    };
++  }
+ }
+\ No newline at end of file
+diff --git a/backend/src/app.module.ts b/backend/src/app.module.ts
+index 913eba7..a45bb59 100644
+--- a/backend/src/app.module.ts
++++ b/backend/src/app.module.ts
+@@ -13,6 +13,8 @@ import { DeliveriesModule } from './deliveries/deliveries.module';
+ import { ProductsModule } from './products/products.module';
+ import { AdminModule } from './admin/admin.module';
+ import { RidersModule } from './riders/riders.module';
++import { PromotionsModule } from './promotions/promotions.module';
++import { ChatModule } from './chat/chat.module';
+ 
+ @Module({
+   imports: [
+@@ -35,6 +37,8 @@ import { RidersModule } from './riders/riders.module';
+     DeliveriesModule,
+     ProductsModule,
+     RidersModule,
++    PromotionsModule,
++    ChatModule,
+   ],
+   controllers: [AppController],
+   providers: [AppService],
+diff --git a/backend/src/chat/chat.controller.ts b/backend/src/chat/chat.controller.ts
+new file mode 100644
+index 0000000..259322e
+--- /dev/null
++++ b/backend/src/chat/chat.controller.ts
+@@ -0,0 +1,19 @@
++import { Controller, Get, Param, UseGuards } from '@nestjs/common';
++import { PrismaService } from '../prisma/prisma.service';
++import { AuthGuard } from '../auth/auth.guard';
++
++@Controller('chat')
++export class ChatController {
++  constructor(private readonly prisma: PrismaService) {}
++
++  // REST fallback for loading history when the chat screen first opens
++  // (the gateway above only pushes new messages to already-connected sockets).
++  @UseGuards(AuthGuard)
++  @Get(':orderId/history')
++  async getHistory(@Param('orderId') orderId: string) {
++    return this.prisma.chatMessage.findMany({
++      where: { order_id: orderId },
++      orderBy: { created_at: 'asc' },
++    });
++  }
++}
+diff --git a/backend/src/chat/chat.gateway.ts b/backend/src/chat/chat.gateway.ts
+new file mode 100644
+index 0000000..7234c78
+--- /dev/null
++++ b/backend/src/chat/chat.gateway.ts
+@@ -0,0 +1,37 @@
++import { WebSocketGateway, WebSocketServer, SubscribeMessage, MessageBody, ConnectedSocket } from '@nestjs/websockets';
++import { Server, Socket } from 'socket.io';
++import { PrismaService } from '../prisma/prisma.service';
++
++// Message Center: order-scoped real-time chat between customer, vendor,
++// and rider. Clients join a room named `order_{orderId}` and every message
++// is persisted to the ChatMessage table (so re-opening the chat later shows
++// history — see ChatController.getHistory for the REST-side fetch).
++@WebSocketGateway({ cors: { origin: '*' } })
++export class ChatGateway {
++  @WebSocketServer()
++  server: Server;
++
++  constructor(private readonly prisma: PrismaService) {}
++
++  @SubscribeMessage('join_order_chat')
++  handleJoin(@MessageBody() data: { orderId: string }, @ConnectedSocket() client: Socket) {
++    client.join(`order_${data.orderId}`);
++  }
++
++  @SubscribeMessage('send_message')
++  async handleMessage(
++    @MessageBody() data: { orderId: string; senderId: string; senderRole: string; message: string },
++    @ConnectedSocket() client: Socket,
++  ) {
++    const saved = await this.prisma.chatMessage.create({
++      data: {
++        order_id: data.orderId,
++        sender_id: data.senderId,
++        sender_role: data.senderRole,
++        message: data.message,
++      },
++    });
++    this.server.to(`order_${data.orderId}`).emit('new_message', saved);
++    return saved;
++  }
++}
+diff --git a/backend/src/chat/chat.module.ts b/backend/src/chat/chat.module.ts
+new file mode 100644
+index 0000000..217a13f
+--- /dev/null
++++ b/backend/src/chat/chat.module.ts
+@@ -0,0 +1,9 @@
++import { Module } from '@nestjs/common';
++import { ChatGateway } from './chat.gateway';
++import { ChatController } from './chat.controller';
++
++@Module({
++  controllers: [ChatController],
++  providers: [ChatGateway],
++})
++export class ChatModule {}
+diff --git a/backend/src/menu-items/menu-items.controller.ts b/backend/src/menu-items/menu-items.controller.ts
+index 0a0d8bd..94308b4 100644
+--- a/backend/src/menu-items/menu-items.controller.ts
++++ b/backend/src/menu-items/menu-items.controller.ts
+@@ -1,4 +1,7 @@
+-import { Controller, Get, Post, Patch, Body, Param, UseGuards } from '@nestjs/common';
++import { Controller, Get, Post, Patch, Body, Param, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
++import { FileInterceptor } from '@nestjs/platform-express';
++import { diskStorage } from 'multer';
++import { extname } from 'path';
+ import { MenuItemsService } from './menu-items.service';
+ import { AuthGuard } from '../auth/auth.guard';
+ 
+@@ -25,4 +28,28 @@ export class MenuItemsController {
+   setStock(@Param('id') id: string, @Body() body: { in_stock: boolean }) {
+     return this.menuItemsService.setStock(id, body.in_stock);
+   }
++
++  // Vendor Product Images: accepts a single multipart image, saves it to
++  // /uploads (already served statically — see main.ts), and stores the
++  // public URL on the product's image_url column.
++  @UseGuards(AuthGuard)
++  @Post(':id/image')
++  @UseInterceptors(FileInterceptor('image', {
++    storage: diskStorage({
++      destination: './uploads',
++      filename: (req, file, cb) => {
++        const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
++        cb(null, `product-${uniqueSuffix}${extname(file.originalname)}`);
++      },
++    }),
++    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
++  }))
++  async uploadImage(@Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
++    if (!file) return { error: 'No image file uploaded.' };
++    // NOTE: replace with your real deployed host/domain in production —
++    // this assumes the API is reachable at the same origin the app already
++    // uses for every other request (see API_BASE_URL in the Flutter .env).
++    const imageUrl = `/uploads/${file.filename}`;
++    return this.menuItemsService.setImage(id, imageUrl);
++  }
+ }
+diff --git a/backend/src/menu-items/menu-items.service.ts b/backend/src/menu-items/menu-items.service.ts
+index 8a721ee..121b339 100644
+--- a/backend/src/menu-items/menu-items.service.ts
++++ b/backend/src/menu-items/menu-items.service.ts
+@@ -47,6 +47,10 @@ export class MenuItemsService {
+     return this.prisma.product.update({ where: { id }, data: { in_stock: inStock } });
+   }
+ 
++  async setImage(id: string, imageUrl: string) {
++    return this.prisma.product.update({ where: { id }, data: { image_url: imageUrl } });
++  }
++
+   async remove(id: string) {
+     return this.prisma.product.delete({ where: { id } });
+   }
+diff --git a/backend/src/orders/orders.controller.ts b/backend/src/orders/orders.controller.ts
+index 8131de1..eacc8e2 100644
+--- a/backend/src/orders/orders.controller.ts
++++ b/backend/src/orders/orders.controller.ts
+@@ -54,4 +54,10 @@ export class OrdersController {
+   async rateOrder(@Param('id') id: string, @Body() body: { target: 'VENDOR' | 'RIDER', score: number, comment?: string }) {
+     return this.ordersService.rateOrder(id, body.target, body.score, body.comment);
+   }
++
++  @UseGuards(AuthGuard)
++  @Post(':id/dispute')
++  async raiseDispute(@Param('id') id: string, @Body() body: { reason: string }, @Request() req: any) {
++    return this.ordersService.raiseDispute(id, req.user.sub, body.reason);
++  }
+ } // <--- The Controller class safely closes here!
+\ No newline at end of file
+diff --git a/backend/src/orders/orders.service.ts b/backend/src/orders/orders.service.ts
+index 41b3428..9184458 100644
+--- a/backend/src/orders/orders.service.ts
++++ b/backend/src/orders/orders.service.ts
+@@ -189,4 +189,13 @@ export class OrdersService {
+       data: { order_id: orderId, target, target_id: targetId, score, comment },
+     });
+   }
++
++  // --- FUNCTION 9: RAISE DISPUTE (customer -> feeds Admin's Disputes tab) ---
++  async raiseDispute(orderId: string, raisedBy: string, reason: string) {
++    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
++    if (!order) throw new Error('Order not found');
++    return this.prisma.dispute.create({
++      data: { order_id: orderId, raised_by: raisedBy, reason },
++    });
++  }
+ }
+\ No newline at end of file
+diff --git a/backend/src/promotions/promotions.controller.ts b/backend/src/promotions/promotions.controller.ts
+new file mode 100644
+index 0000000..ead64a5
+--- /dev/null
++++ b/backend/src/promotions/promotions.controller.ts
+@@ -0,0 +1,30 @@
++import { Controller, Get, Post, Patch, Body, Param, UseGuards } from '@nestjs/common';
++import { PromotionsService } from './promotions.service';
++import { AuthGuard } from '../auth/auth.guard';
++
++@Controller('promotions')
++export class PromotionsController {
++  constructor(private readonly promotionsService: PromotionsService) {}
++
++  @Get()
++  getActive() {
++    return this.promotionsService.getActive();
++  }
++
++  @Get('validate/:code')
++  validateCode(@Param('code') code: string) {
++    return this.promotionsService.validateCode(code);
++  }
++
++  @UseGuards(AuthGuard)
++  @Post()
++  create(@Body() body: any) {
++    return this.promotionsService.create(body);
++  }
++
++  @UseGuards(AuthGuard)
++  @Patch(':id/active')
++  setActive(@Param('id') id: string, @Body() body: { active: boolean }) {
++    return this.promotionsService.setActive(id, body.active);
++  }
++}
+diff --git a/backend/src/promotions/promotions.module.ts b/backend/src/promotions/promotions.module.ts
+new file mode 100644
+index 0000000..08df681
+--- /dev/null
++++ b/backend/src/promotions/promotions.module.ts
+@@ -0,0 +1,9 @@
++import { Module } from '@nestjs/common';
++import { PromotionsController } from './promotions.controller';
++import { PromotionsService } from './promotions.service';
++
++@Module({
++  controllers: [PromotionsController],
++  providers: [PromotionsService],
++})
++export class PromotionsModule {}
+diff --git a/backend/src/promotions/promotions.service.ts b/backend/src/promotions/promotions.service.ts
+new file mode 100644
+index 0000000..5ab93bd
+--- /dev/null
++++ b/backend/src/promotions/promotions.service.ts
+@@ -0,0 +1,31 @@
++import { Injectable, NotFoundException } from '@nestjs/common';
++import { PrismaService } from '../prisma/prisma.service';
++
++@Injectable()
++export class PromotionsService {
++  constructor(private prisma: PrismaService) {}
++
++  async getActive() {
++    return this.prisma.promotion.findMany({
++      where: { active: true, OR: [{ expires_at: null }, { expires_at: { gte: new Date() } }] },
++      orderBy: { created_at: 'desc' },
++    });
++  }
++
++  async validateCode(code: string) {
++    const promo = await this.prisma.promotion.findUnique({ where: { code } });
++    if (!promo || !promo.active) throw new NotFoundException('Invalid or expired promo code.');
++    if (promo.expires_at && promo.expires_at < new Date()) throw new NotFoundException('This code has expired.');
++    return promo;
++  }
++
++  async create(data: { code: string; description: string; discount_pct?: number; flat_amount?: number; expires_at?: string }) {
++    return this.prisma.promotion.create({
++      data: { ...data, expires_at: data.expires_at ? new Date(data.expires_at) : null },
++    });
++  }
++
++  async setActive(id: string, active: boolean) {
++    return this.prisma.promotion.update({ where: { id }, data: { active } });
++  }
++}
+diff --git a/backend/src/users/dto/create-user.dto.ts b/backend/src/users/dto/create-user.dto.ts
+deleted file mode 100644
+index 0311be1..0000000
+--- a/backend/src/users/dto/create-user.dto.ts
++++ /dev/null
+@@ -1 +0,0 @@
+-export class CreateUserDto {}
+diff --git a/backend/src/users/dto/update-user.dto.ts b/backend/src/users/dto/update-user.dto.ts
+deleted file mode 100644
+index dfd37fb..0000000
+--- a/backend/src/users/dto/update-user.dto.ts
++++ /dev/null
+@@ -1,4 +0,0 @@
+-import { PartialType } from '@nestjs/mapped-types';
+-import { CreateUserDto } from './create-user.dto';
+-
+-export class UpdateUserDto extends PartialType(CreateUserDto) {}
+diff --git a/backend/src/users/users.controller.ts b/backend/src/users/users.controller.ts
+index 3eca7eb..0a0f093 100644
+--- a/backend/src/users/users.controller.ts
++++ b/backend/src/users/users.controller.ts
+@@ -1,34 +1,78 @@
+-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
++import { Controller, Get, Post, Delete, Body, Param, UseGuards } from '@nestjs/common';
+ import { UsersService } from './users.service';
+-import { CreateUserDto } from './dto/create-user.dto';
+-import { UpdateUserDto } from './dto/update-user.dto';
++import { AuthGuard } from '../auth/auth.guard';
+ 
+ @Controller('users')
+ export class UsersController {
+   constructor(private readonly usersService: UsersService) {}
+ 
+-  @Post()
+-  create(@Body() createUserDto: CreateUserDto) {
+-    return this.usersService.create(createUserDto);
++  @UseGuards(AuthGuard)
++  @Get(':id')
++  findOne(@Param('id') id: string) {
++    return this.usersService.findOne(id);
+   }
+ 
+-  @Get()
+-  findAll() {
+-    return this.usersService.findAll();
++  // --- Wallet ---
++  @UseGuards(AuthGuard)
++  @Get(':id/wallet')
++  getWallet(@Param('id') id: string) {
++    return this.usersService.getWallet(id);
+   }
+ 
+-  @Get(':id')
+-  findOne(@Param('id') id: string) {
+-    return this.usersService.findOne(+id);
++  @UseGuards(AuthGuard)
++  @Post(':id/wallet/top-up')
++  topUpWallet(@Param('id') id: string, @Body() body: { amount: number }) {
++    return this.usersService.topUpWallet(id, body.amount);
++  }
++
++  // --- Favourites ---
++  @UseGuards(AuthGuard)
++  @Get(':id/favorites')
++  getFavorites(@Param('id') id: string) {
++    return this.usersService.getFavorites(id);
++  }
++
++  @UseGuards(AuthGuard)
++  @Post(':id/favorites')
++  addFavorite(@Param('id') id: string, @Body() body: { vendor_id: string }) {
++    return this.usersService.addFavorite(id, body.vendor_id);
++  }
++
++  @UseGuards(AuthGuard)
++  @Delete(':id/favorites/:vendorId')
++  removeFavorite(@Param('id') id: string, @Param('vendorId') vendorId: string) {
++    return this.usersService.removeFavorite(id, vendorId);
++  }
++
++  // --- Family ---
++  @UseGuards(AuthGuard)
++  @Get(':id/family')
++  getFamily(@Param('id') id: string) {
++    return this.usersService.getFamily(id);
++  }
++
++  @UseGuards(AuthGuard)
++  @Post(':id/family')
++  inviteFamilyMember(@Param('id') id: string, @Body() body: { phone: string; spending_limit?: number }) {
++    return this.usersService.inviteFamilyMember(id, body.phone, body.spending_limit);
++  }
++
++  @UseGuards(AuthGuard)
++  @Delete(':id/family/:memberId')
++  removeFamilyMember(@Param('id') id: string, @Param('memberId') memberId: string) {
++    return this.usersService.removeFamilyMember(id, memberId);
+   }
+ 
+-  @Patch(':id')
+-  update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
+-    return this.usersService.update(+id, updateUserDto);
++  // --- Support tickets ---
++  @UseGuards(AuthGuard)
++  @Post(':id/support-tickets')
++  createSupportTicket(@Param('id') id: string, @Body() body: { subject: string; message: string }) {
++    return this.usersService.createSupportTicket(id, body.subject, body.message);
+   }
+ 
+-  @Delete(':id')
+-  remove(@Param('id') id: string) {
+-    return this.usersService.remove(+id);
++  @UseGuards(AuthGuard)
++  @Get(':id/support-tickets')
++  getMySupportTickets(@Param('id') id: string) {
++    return this.usersService.getMySupportTickets(id);
+   }
+ }
+diff --git a/backend/src/users/users.service.ts b/backend/src/users/users.service.ts
+index 0a55903..7c69452 100644
+--- a/backend/src/users/users.service.ts
++++ b/backend/src/users/users.service.ts
+@@ -1,26 +1,92 @@
+-import { Injectable } from '@nestjs/common';
+-import { CreateUserDto } from './dto/create-user.dto';
+-import { UpdateUserDto } from './dto/update-user.dto';
++import { Injectable, NotFoundException } from '@nestjs/common';
++import { PrismaService } from '../prisma/prisma.service';
+ 
+ @Injectable()
+ export class UsersService {
+-  create(createUserDto: CreateUserDto) {
+-    return 'This action adds a new user';
++  constructor(private prisma: PrismaService) {}
++
++  async findOne(id: string) {
++    const user = await this.prisma.user.findUnique({ where: { id } });
++    if (!user) throw new NotFoundException('User not found');
++    return user;
++  }
++
++  // --- Customer cash wallet ---
++  async getWallet(userId: string) {
++    const user = await this.findOne(userId);
++    return { balance: user.cash_wallet_balance };
++  }
++
++  // There's no real payment gateway wired to "top up" yet — this exists so
++  // the Add Cash button in the app does something real (credits the ledger
++  // and the wallet) rather than nothing. Swap the direct wallet increment
++  // for a real M-Pesa STK-push-to-wallet flow once that's built.
++  async topUpWallet(userId: string, amount: number) {
++    if (amount <= 0) throw new NotFoundException('Invalid amount');
++    const user = await this.prisma.user.update({
++      where: { id: userId },
++      data: { cash_wallet_balance: { increment: amount } },
++    });
++    return { balance: user.cash_wallet_balance };
++  }
++
++  // --- Favourites ---
++  async getFavorites(userId: string) {
++    return this.prisma.favoriteVendor.findMany({
++      where: { user_id: userId },
++      include: { user: false },
++    });
+   }
+ 
+-  findAll() {
+-    return `This action returns all users`;
++  async addFavorite(userId: string, vendorId: string) {
++    return this.prisma.favoriteVendor.upsert({
++      where: { user_id_vendor_id: { user_id: userId, vendor_id: vendorId } },
++      create: { user_id: userId, vendor_id: vendorId },
++      update: {},
++    });
++  }
++
++  async removeFavorite(userId: string, vendorId: string) {
++    await this.prisma.favoriteVendor.deleteMany({ where: { user_id: userId, vendor_id: vendorId } });
++    return { message: 'Removed from favourites.' };
++  }
++
++  // --- Family sharing ---
++  async getFamily(ownerId: string) {
++    return this.prisma.familyMember.findMany({
++      where: { owner_id: ownerId },
++      include: { member: true },
++    });
++  }
++
++  async inviteFamilyMember(ownerId: string, memberPhone: string, spendingLimit?: number) {
++    const member = await this.prisma.user.findUnique({ where: { phone: memberPhone } });
++    if (!member) throw new NotFoundException('No account found with that phone number.');
++    if (member.id === ownerId) throw new NotFoundException("You can't invite yourself.");
++
++    return this.prisma.familyMember.upsert({
++      where: { owner_id_member_id: { owner_id: ownerId, member_id: member.id } },
++      create: { owner_id: ownerId, member_id: member.id, spending_limit: spendingLimit },
++      update: { spending_limit: spendingLimit },
++    });
+   }
+ 
+-  findOne(id: number) {
+-    return `This action returns a #${id} user`;
++  async removeFamilyMember(ownerId: string, memberId: string) {
++    await this.prisma.familyMember.deleteMany({ where: { owner_id: ownerId, member_id: memberId } });
++    return { message: 'Family member removed.' };
+   }
+ 
+-  update(id: number, updateUserDto: UpdateUserDto) {
+-    return `This action updates a #${id} user`;
++  // --- Support tickets (customer creates, Admin resolves) ---
++  async createSupportTicket(userId: string, subject: string, message: string) {
++    return this.prisma.supportTicket.create({
++      data: { user_id: userId, subject, message },
++    });
+   }
+ 
+-  remove(id: number) {
+-    return `This action removes a #${id} user`;
++  async getMySupportTickets(userId: string) {
++    return this.prisma.supportTicket.findMany({
++      where: { user_id: userId },
++      orderBy: { created_at: 'desc' },
++    });
+   }
+ }
+diff --git a/greengrocer_app/lib/main.dart b/greengrocer_app/lib/main.dart
+index 2693f5d..fdbb0a5 100644
+--- a/greengrocer_app/lib/main.dart
++++ b/greengrocer_app/lib/main.dart
+@@ -12,6 +12,7 @@ import 'package:image_picker/image_picker.dart';
+ import 'package:geolocator/geolocator.dart';
+ import 'package:google_maps_flutter/google_maps_flutter.dart';
+ import 'package:flutter_dotenv/flutter_dotenv.dart';
++import 'package:socket_io_client/socket_io_client.dart' as IO;
+ import 'services/auth_service.dart';
+ import 'package:flutter/foundation.dart';
+ 
+@@ -147,7 +148,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
+                       boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 8))],
+                     ),
+                     // 👇 This is the only line that changed 👇
+-                    child: Center(child: Image.asset('assets/images/logo.png', width: 70, height: 70)),
++                    child: Center(child: Image.asset('assets/images/Logo.png', width: 70, height: 70)),
+                   ),
+                   const SizedBox(height: 20),
+                   const Text('The Greengrocer', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+@@ -421,6 +422,44 @@ void _showErrorSnack(BuildContext context, Object error) {
+   );
+ }
+ 
++void _showSupportTicketDialog(BuildContext context) {
++  final subjectCtrl = TextEditingController();
++  final messageCtrl = TextEditingController();
++  showDialog(
++    context: context,
++    builder: (context) => AlertDialog(
++      title: const Text('Contact Support'),
++      content: Column(
++        mainAxisSize: MainAxisSize.min,
++        children: [
++          _buildStyledTextField(subjectCtrl, 'Subject', Theme.of(context).brightness == Brightness.dark),
++          const SizedBox(height: 12),
++          _buildStyledTextField(messageCtrl, 'How can we help?', Theme.of(context).brightness == Brightness.dark),
++        ],
++      ),
++      actions: [
++        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
++        ElevatedButton(
++          onPressed: () async {
++            if (subjectCtrl.text.isEmpty || messageCtrl.text.isEmpty) return;
++            Navigator.pop(context);
++            try {
++              final userId = await AuthService().getUserId();
++              if (userId != null) {
++                await AuthService().createSupportTicket(userId, subjectCtrl.text, messageCtrl.text);
++                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ticket submitted — our team will follow up.')));
++              }
++            } catch (e) {
++              if (context.mounted) _showErrorSnack(context, e);
++            }
++          },
++          child: const Text('Submit'),
++        ),
++      ],
++    ),
++  );
++}
++
+ // ============================================================================
+ // LOGIN SCREEN — real network call every time, no client-side bypass.
+ // Includes a small "quick test accounts" section that hits the backend's
+@@ -1051,11 +1090,44 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
+   }
+ }
+ 
+-class SearchScreen extends StatelessWidget {
++class SearchScreen extends StatefulWidget {
+   const SearchScreen({super.key});
++  @override
++  State<SearchScreen> createState() => _SearchScreenState();
++}
++
++class _SearchScreenState extends State<SearchScreen> {
++  final AuthService _auth = AuthService();
++  final TextEditingController _queryCtrl = TextEditingController();
++  List<dynamic> _allProducts = [];
++  List<dynamic> _filtered = [];
++  bool _isLoading = true;
++
++  @override
++  void initState() {
++    super.initState();
++    _load();
++  }
++
++  Future<void> _load() async {
++    setState(() => _isLoading = true);
++    try {
++      _allProducts = await _auth.getProducts();
++      _filtered = _allProducts;
++    } catch (e) {}
++    setState(() => _isLoading = false);
++  }
++
++  void _onQueryChanged(String query) {
++    setState(() {
++      _filtered = _allProducts.where((p) => (p['name'] as String? ?? '').toLowerCase().contains(query.toLowerCase())).toList();
++    });
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     final isDark = Theme.of(context).brightness == Brightness.dark;
++    final cart = Provider.of<CartProvider>(context, listen: false);
+     return SafeArea(
+       child: Padding(
+         padding: const EdgeInsets.symmetric(horizontal: 16.0),
+@@ -1066,10 +1138,40 @@ class SearchScreen extends StatelessWidget {
+             Container(
+               height: 45,
+               decoration: BoxDecoration(color: isDark ? Colors.grey[800] : Colors.grey[200], borderRadius: BorderRadius.circular(8)),
+-              child: const TextField(decoration: InputDecoration(hintText: 'Search The Greengrocer', prefixIcon: Icon(Icons.search), border: InputBorder.none)),
++              child: TextField(
++                controller: _queryCtrl,
++                onChanged: _onQueryChanged,
++                decoration: const InputDecoration(hintText: 'Search The Greengrocer', prefixIcon: Icon(Icons.search), border: InputBorder.none),
++              ),
++            ),
++            const SizedBox(height: 16),
++            Expanded(
++              child: _isLoading
++                  ? const Center(child: CircularProgressIndicator())
++                  : _filtered.isEmpty
++                      ? const Center(child: Text('No matching products.'))
++                      : ListView.builder(
++                          itemCount: _filtered.length,
++                          itemBuilder: (context, index) {
++                            final p = _filtered[index];
++                            final bool inStock = p['in_stock'] ?? true;
++                            return ListTile(
++                              leading: Text(p['emoji'] ?? '🛒', style: const TextStyle(fontSize: 28)),
++                              title: Text(p['name'] ?? ''),
++                              subtitle: Text('Ksh ${p['price']} ${p['unit'] ?? ''}'),
++                              trailing: inStock
++                                  ? IconButton(
++                                      icon: const Icon(Icons.add_circle, color: Colors.green),
++                                      onPressed: () {
++                                        cart.addItem(p['name'], p['price'], p['emoji'] ?? '🛒');
++                                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${p['name']} added!'), duration: const Duration(seconds: 1)));
++                                      },
++                                    )
++                                  : const Text('Out of stock', style: TextStyle(color: Colors.grey, fontSize: 12)),
++                            );
++                          },
++                        ),
+             ),
+-            const SizedBox(height: 24),
+-            Text('Product search filters by name/category aren\'t wired to the API yet.', style: TextStyle(color: Colors.grey[600])),
+           ],
+         ),
+       ),
+@@ -1264,7 +1366,7 @@ class ProfileScreen extends StatelessWidget {
+                 _settingsTile('Account settings', Icons.settings_outlined, textColor, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AccountSettingsScreen()))),
+                 _settingsTile('Family', Icons.group_outlined, textColor, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const FamilyScreen()))),
+                 _settingsTile('Promotions', Icons.local_offer_outlined, textColor, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PromotionsScreen()))),
+-                _settingsTile('Help', Icons.help_outline, textColor, () => _showFeatureDialog(context, "Support", "Support chat isn't wired to a real backend yet.")),
++                _settingsTile('Help', Icons.help_outline, textColor, () => _showSupportTicketDialog(context)),
+                 ListTile(
+                   leading: const Icon(Icons.logout, color: Colors.red),
+                   title: const Text('Logout', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w500, fontSize: 16)),
+@@ -1301,49 +1403,180 @@ class ProfileScreen extends StatelessWidget {
+   }
+ }
+ 
+-class FavouritesScreen extends StatelessWidget {
++class FavouritesScreen extends StatefulWidget {
+   const FavouritesScreen({super.key});
++  @override
++  State<FavouritesScreen> createState() => _FavouritesScreenState();
++}
++
++class _FavouritesScreenState extends State<FavouritesScreen> {
++  final AuthService _auth = AuthService();
++  List<dynamic> _favorites = [];
++  bool _isLoading = true;
++  String? _userId;
++
++  @override
++  void initState() {
++    super.initState();
++    _load();
++  }
++
++  Future<void> _load() async {
++    setState(() => _isLoading = true);
++    _userId = await _auth.getUserId();
++    if (_userId != null) {
++      try {
++        _favorites = await _auth.getFavorites(_userId!);
++      } catch (e) {}
++    }
++    setState(() => _isLoading = false);
++  }
++
++  Future<void> _remove(String vendorId) async {
++    if (_userId == null) return;
++    try {
++      await _auth.removeFavorite(_userId!, vendorId);
++      await _load();
++    } catch (e) {
++      if (mounted) _showErrorSnack(context, e);
++    }
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     return Scaffold(
+       appBar: AppBar(title: const Text("Favourites")),
+-      body: Center(
+-        child: Column(
+-          mainAxisAlignment: MainAxisAlignment.center,
+-          children: [
+-            Icon(Icons.favorite_border, size: 80, color: Colors.grey[400]),
+-            const SizedBox(height: 16),
+-            const Text("Favourites aren't backed by the API yet", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+-          ],
+-        ),
++      body: RefreshIndicator(
++        onRefresh: _load,
++        child: _isLoading
++            ? const Center(child: CircularProgressIndicator())
++            : _favorites.isEmpty
++                ? ListView(
++                    children: [
++                      Center(
++                        child: Column(
++                          mainAxisAlignment: MainAxisAlignment.center,
++                          children: [
++                            SizedBox(height: 120),
++                            Icon(Icons.favorite_border, size: 80, color: Colors.grey[400]),
++                            const SizedBox(height: 16),
++                            const Text("No favourites yet", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
++                          ],
++                        ),
++                      ),
++                    ],
++                  )
++                : ListView.builder(
++                    padding: const EdgeInsets.all(16),
++                    itemCount: _favorites.length,
++                    itemBuilder: (context, index) {
++                      final fav = _favorites[index];
++                      return ListTile(
++                        leading: const Icon(Icons.store, color: Colors.green),
++                        title: Text('Vendor ${fav['vendor_id'].toString().substring(0, 8)}'),
++                        trailing: IconButton(icon: const Icon(Icons.favorite, color: Colors.red), onPressed: () => _remove(fav['vendor_id'])),
++                      );
++                    },
++                  ),
+       ),
+     );
+   }
+ }
+ 
+-class WalletScreen extends StatelessWidget {
++class WalletScreen extends StatefulWidget {
+   const WalletScreen({super.key});
++  @override
++  State<WalletScreen> createState() => _WalletScreenState();
++}
++
++class _WalletScreenState extends State<WalletScreen> {
++  final AuthService _auth = AuthService();
++  double _balance = 0.0;
++  bool _isLoading = true;
++  String? _userId;
++
++  @override
++  void initState() {
++    super.initState();
++    _load();
++  }
++
++  Future<void> _load() async {
++    setState(() => _isLoading = true);
++    _userId = await _auth.getUserId();
++    if (_userId != null) {
++      try {
++        _balance = await _auth.getUserWallet(_userId!);
++      } catch (e) {}
++    }
++    setState(() => _isLoading = false);
++  }
++
++  void _showTopUpDialog() {
++    final amountCtrl = TextEditingController();
++    showDialog(
++      context: context,
++      builder: (context) => AlertDialog(
++        title: const Text('Add Cash'),
++        content: _buildStyledTextField(amountCtrl, 'Amount (Ksh)', Theme.of(context).brightness == Brightness.dark),
++        actions: [
++          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
++          ElevatedButton(
++            onPressed: () async {
++              final amount = double.tryParse(amountCtrl.text);
++              if (amount == null || _userId == null) return;
++              Navigator.pop(context);
++              try {
++                _balance = await _auth.topUpWallet(_userId!, amount);
++                setState(() {});
++              } catch (e) {
++                if (mounted) _showErrorSnack(context, e);
++              }
++            },
++            child: const Text('Confirm'),
++          ),
++        ],
++      ),
++    );
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     return Scaffold(
+       appBar: AppBar(title: const Text("Wallet")),
+-      body: ListView(
+-        padding: const EdgeInsets.all(16),
+-        children: [
+-          Container(
+-            padding: const EdgeInsets.all(24),
+-            decoration: BoxDecoration(color: Colors.green[700], borderRadius: BorderRadius.circular(16)),
+-            child: const Column(
+-              crossAxisAlignment: CrossAxisAlignment.start,
+-              children: [
+-                Text("Customer cash-wallet isn't part of the backend yet", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+-                SizedBox(height: 8),
+-                Text("Checkout goes straight through M-Pesa STK push instead.", style: TextStyle(color: Colors.white70)),
+-              ],
++      body: _isLoading
++          ? const Center(child: CircularProgressIndicator())
++          : RefreshIndicator(
++              onRefresh: _load,
++              child: ListView(
++                padding: const EdgeInsets.all(16),
++                children: [
++                  Container(
++                    padding: const EdgeInsets.all(24),
++                    decoration: BoxDecoration(color: Colors.green[700], borderRadius: BorderRadius.circular(16)),
++                    child: Column(
++                      crossAxisAlignment: CrossAxisAlignment.start,
++                      children: [
++                        const Text("Cash Balance", style: TextStyle(color: Colors.white70, fontSize: 16)),
++                        const SizedBox(height: 8),
++                        Text(_balance.toStringAsFixed(2), style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
++                        const SizedBox(height: 16),
++                        ElevatedButton(
++                          style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.green[700]),
++                          onPressed: _showTopUpDialog,
++                          child: const Text("Add Cash"),
++                        ),
++                      ],
++                    ),
++                  ),
++                  const SizedBox(height: 16),
++                  const Padding(
++                    padding: EdgeInsets.symmetric(horizontal: 8),
++                    child: Text('Note: this credits your wallet directly for now — a real M-Pesa top-up flow (STK push into the wallet) can replace this later.', style: TextStyle(color: Colors.grey, fontSize: 12)),
++                  ),
++                ],
++              ),
+             ),
+-          ),
+-        ],
+-      ),
+     );
+   }
+ }
+@@ -1415,6 +1648,33 @@ class _OrdersTabScreenState extends State<OrdersTabScreen> {
+     );
+   }
+ 
++  void _showDisputeDialog(String orderId) {
++    final reasonCtrl = TextEditingController();
++    showDialog(
++      context: context,
++      builder: (context) => AlertDialog(
++        title: const Text('Report a problem'),
++        content: _buildStyledTextField(reasonCtrl, 'What went wrong?', Theme.of(context).brightness == Brightness.dark),
++        actions: [
++          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
++          ElevatedButton(
++            onPressed: () async {
++              if (reasonCtrl.text.isEmpty) return;
++              Navigator.pop(context);
++              try {
++                await AuthService().raiseDispute(orderId, reasonCtrl.text);
++                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Reported — our team will review it.')));
++              } catch (e) {
++                if (mounted) _showErrorSnack(context, e);
++              }
++            },
++            child: const Text('Submit'),
++          ),
++        ],
++      ),
++    );
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     final isDark = Theme.of(context).brightness == Brightness.dark;
+@@ -1469,6 +1729,26 @@ class _OrdersTabScreenState extends State<OrdersTabScreen> {
+                                     child: const Text('Rate this order'),
+                                   ),
+                                 ],
++                                if (!['DELIVERED', 'CANCELLED'].contains(status)) ...[
++                                  const SizedBox(height: 8),
++                                  OutlinedButton.icon(
++                                    style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 40)),
++                                    onPressed: () async {
++                                      final userId = await AuthService().getUserId();
++                                      if (context.mounted && userId != null) {
++                                        Navigator.push(context, MaterialPageRoute(builder: (context) => ChatScreen(orderId: order['id'], senderId: userId, senderRole: 'CUSTOMER')));
++                                      }
++                                    },
++                                    icon: const Icon(Icons.chat_bubble_outline, size: 18),
++                                    label: const Text('Chat about this order'),
++                                  ),
++                                ],
++                                const SizedBox(height: 8),
++                                TextButton.icon(
++                                  onPressed: () => _showDisputeDialog(order['id']),
++                                  icon: const Icon(Icons.flag_outlined, size: 16, color: Colors.red),
++                                  label: const Text('Report a problem', style: TextStyle(color: Colors.red, fontSize: 13)),
++                                ),
+                               ],
+                             ),
+                           );
+@@ -1495,24 +1775,157 @@ class AccountSettingsScreen extends StatelessWidget {
+   }
+ }
+ 
+-class FamilyScreen extends StatelessWidget {
++class FamilyScreen extends StatefulWidget {
+   const FamilyScreen({super.key});
++  @override
++  State<FamilyScreen> createState() => _FamilyScreenState();
++}
++
++class _FamilyScreenState extends State<FamilyScreen> {
++  final AuthService _auth = AuthService();
++  List<dynamic> _members = [];
++  bool _isLoading = true;
++  String? _userId;
++
++  @override
++  void initState() {
++    super.initState();
++    _load();
++  }
++
++  Future<void> _load() async {
++    setState(() => _isLoading = true);
++    _userId = await _auth.getUserId();
++    if (_userId != null) {
++      try {
++        _members = await _auth.getFamily(_userId!);
++      } catch (e) {}
++    }
++    setState(() => _isLoading = false);
++  }
++
++  void _showInviteDialog() {
++    final phoneCtrl = TextEditingController();
++    final limitCtrl = TextEditingController();
++    showDialog(
++      context: context,
++      builder: (context) => AlertDialog(
++        title: const Text('Invite family member'),
++        content: Column(
++          mainAxisSize: MainAxisSize.min,
++          children: [
++            _buildStyledTextField(phoneCtrl, 'Their phone (e.g. +2547XXXXXXXX)', Theme.of(context).brightness == Brightness.dark),
++            const SizedBox(height: 12),
++            _buildStyledTextField(limitCtrl, 'Monthly spending limit (optional, Ksh)', Theme.of(context).brightness == Brightness.dark),
++          ],
++        ),
++        actions: [
++          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
++          ElevatedButton(
++            onPressed: () async {
++              if (phoneCtrl.text.isEmpty) return;
++              Navigator.pop(context);
++              try {
++                await _auth.inviteFamilyMember(_userId!, phoneCtrl.text, spendingLimit: double.tryParse(limitCtrl.text));
++                await _load();
++              } catch (e) {
++                if (mounted) _showErrorSnack(context, e);
++              }
++            },
++            child: const Text('Invite'),
++          ),
++        ],
++      ),
++    );
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     return Scaffold(
+       appBar: AppBar(title: const Text("Family")),
+-      body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('Family accounts aren\'t part of the backend design yet.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))),
++      body: _isLoading
++          ? const Center(child: CircularProgressIndicator())
++          : RefreshIndicator(
++              onRefresh: _load,
++              child: ListView(
++                padding: const EdgeInsets.all(16),
++                children: [
++                  ElevatedButton.icon(onPressed: _showInviteDialog, icon: const Icon(Icons.person_add), label: const Text('Invite family member')),
++                  const SizedBox(height: 16),
++                  if (_members.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('No family members added yet.')),
++                  ..._members.map((m) => ListTile(
++                        leading: const Icon(Icons.person, color: Colors.blueGrey),
++                        title: Text(m['member']?['name'] ?? 'Family member'),
++                        subtitle: Text(m['spending_limit'] != null ? 'Limit: Ksh ${m['spending_limit']}' : 'No spending limit set'),
++                        trailing: IconButton(
++                          icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
++                          onPressed: () async {
++                            try {
++                              await _auth.removeFamilyMember(_userId!, m['member_id']);
++                              await _load();
++                            } catch (e) {
++                              if (mounted) _showErrorSnack(context, e);
++                            }
++                          },
++                        ),
++                      )),
++                ],
++              ),
++            ),
+     );
+   }
+ }
+ 
+-class PromotionsScreen extends StatelessWidget {
++class PromotionsScreen extends StatefulWidget {
+   const PromotionsScreen({super.key});
++  @override
++  State<PromotionsScreen> createState() => _PromotionsScreenState();
++}
++
++class _PromotionsScreenState extends State<PromotionsScreen> {
++  final AuthService _auth = AuthService();
++  List<dynamic> _promos = [];
++  bool _isLoading = true;
++
++  @override
++  void initState() {
++    super.initState();
++    _load();
++  }
++
++  Future<void> _load() async {
++    setState(() => _isLoading = true);
++    try {
++      _promos = await _auth.getActivePromotions();
++    } catch (e) {}
++    setState(() => _isLoading = false);
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     return Scaffold(
+       appBar: AppBar(title: const Text("Promotions")),
+-      body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('No promo/voucher system exists on the backend yet.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))),
++      body: _isLoading
++          ? const Center(child: CircularProgressIndicator())
++          : RefreshIndicator(
++              onRefresh: _load,
++              child: _promos.isEmpty
++                  ? ListView(children: const [Padding(padding: EdgeInsets.all(24), child: Text('No active promotions right now.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))])
++                  : ListView(
++                      padding: const EdgeInsets.all(16),
++                      children: _promos
++                          .map((p) => Card(
++                                margin: const EdgeInsets.only(bottom: 16),
++                                child: ListTile(
++                                  contentPadding: const EdgeInsets.all(16),
++                                  leading: const Icon(Icons.local_offer, color: Colors.green, size: 40),
++                                  title: Text(p['description'] ?? p['code'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
++                                  subtitle: Text('Code: ${p['code']}'),
++                                ),
++                              ))
++                          .toList(),
++                    ),
++            ),
+     );
+   }
+ }
+@@ -1994,41 +2407,64 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
+     final priceCtrl = TextEditingController();
+     final unitCtrl = TextEditingController(text: 'kg');
+     final emojiCtrl = TextEditingController(text: '🛒');
++    File? pickedImage;
++    final picker = ImagePicker();
++
+     showDialog(
+       context: context,
+-      builder: (context) => AlertDialog(
+-        title: const Text('Add Menu Item'),
+-        content: SingleChildScrollView(
+-          child: Column(
+-            mainAxisSize: MainAxisSize.min,
+-            children: [
+-              _buildStyledTextField(nameCtrl, 'Item name', Theme.of(context).brightness == Brightness.dark),
+-              const SizedBox(height: 12),
+-              _buildStyledTextField(priceCtrl, 'Price (Ksh)', Theme.of(context).brightness == Brightness.dark),
+-              const SizedBox(height: 12),
+-              _buildStyledTextField(unitCtrl, 'Unit (e.g. kg, bunch)', Theme.of(context).brightness == Brightness.dark),
+-              const SizedBox(height: 12),
+-              _buildStyledTextField(emojiCtrl, 'Emoji', Theme.of(context).brightness == Brightness.dark),
+-            ],
++      builder: (context) => StatefulBuilder(
++        builder: (context, setDialogState) => AlertDialog(
++          title: const Text('Add Menu Item'),
++          content: SingleChildScrollView(
++            child: Column(
++              mainAxisSize: MainAxisSize.min,
++              children: [
++                GestureDetector(
++                  onTap: () async {
++                    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
++                    if (picked != null) setDialogState(() => pickedImage = File(picked.path));
++                  },
++                  child: Container(
++                    height: 120, width: double.infinity,
++                    decoration: BoxDecoration(
++                      color: Colors.grey[200], borderRadius: BorderRadius.circular(12),
++                      image: pickedImage != null ? DecorationImage(image: FileImage(pickedImage!), fit: BoxFit.cover) : null,
++                    ),
++                    child: pickedImage == null ? const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.add_a_photo, size: 32, color: Colors.grey), Text('Add a photo (optional)', style: TextStyle(color: Colors.grey))]) : null,
++                  ),
++                ),
++                const SizedBox(height: 12),
++                _buildStyledTextField(nameCtrl, 'Item name', Theme.of(context).brightness == Brightness.dark),
++                const SizedBox(height: 12),
++                _buildStyledTextField(priceCtrl, 'Price (Ksh)', Theme.of(context).brightness == Brightness.dark),
++                const SizedBox(height: 12),
++                _buildStyledTextField(unitCtrl, 'Unit (e.g. kg, bunch)', Theme.of(context).brightness == Brightness.dark),
++                const SizedBox(height: 12),
++                _buildStyledTextField(emojiCtrl, 'Emoji', Theme.of(context).brightness == Brightness.dark),
++              ],
++            ),
+           ),
++          actions: [
++            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
++            ElevatedButton(
++              onPressed: () async {
++                final price = int.tryParse(priceCtrl.text);
++                if (nameCtrl.text.isEmpty || price == null) return;
++                Navigator.pop(context);
++                try {
++                  final created = await _auth.addMenuItem(widget.vendorId, nameCtrl.text, price, emojiCtrl.text, unitCtrl.text);
++                  if (pickedImage != null && created['id'] != null) {
++                    await _auth.uploadProductImage(created['id'], pickedImage!.path);
++                  }
++                  await _loadMenu();
++                } catch (e) {
++                  if (mounted) _showErrorSnack(context, e);
++                }
++              },
++              child: const Text('Save Item'),
++            ),
++          ],
+         ),
+-        actions: [
+-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+-          ElevatedButton(
+-            onPressed: () async {
+-              final price = int.tryParse(priceCtrl.text);
+-              if (nameCtrl.text.isEmpty || price == null) return;
+-              Navigator.pop(context);
+-              try {
+-                await _auth.addMenuItem(widget.vendorId, nameCtrl.text, price, emojiCtrl.text, unitCtrl.text);
+-                await _loadMenu();
+-              } catch (e) {
+-                if (mounted) _showErrorSnack(context, e);
+-              }
+-            },
+-            child: const Text('Save Item'),
+-          ),
+-        ],
+       ),
+     );
+   }
+@@ -2175,6 +2611,8 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
+                 Row(children: [
+                   ElevatedButton(style: ElevatedButton.styleFrom(minimumSize: const Size(0, 40)), onPressed: () => onAction(order), child: Text(actionText)),
+                   if (onManage != null) ...[const SizedBox(width: 8), TextButton(onPressed: () => onManage(order), child: const Text("Cancel"))],
++                  const Spacer(),
++                  IconButton(icon: const Icon(Icons.chat_bubble_outline), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => ChatScreen(orderId: order['id'], senderId: widget.vendorId, senderRole: 'VENDOR')))),
+                 ]),
+               ],
+             ),
+@@ -2196,7 +2634,13 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
+           child: ListTile(
+             title: Text('Order #${order['id'].toString().substring(0, 8)}'),
+             subtitle: Text(labels[order['status']] ?? order['status']),
+-            trailing: Text('Ksh ${order['total']}'),
++            trailing: Row(
++              mainAxisSize: MainAxisSize.min,
++              children: [
++                Text('Ksh ${order['total']}'),
++                IconButton(icon: const Icon(Icons.chat_bubble_outline, size: 20), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => ChatScreen(orderId: order['id'], senderId: widget.vendorId, senderRole: 'VENDOR')))),
++              ],
++            ),
+           ),
+         );
+       },
+@@ -2214,12 +2658,33 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
+           if (_isLoadingMenu) const Center(child: CircularProgressIndicator()),
+           if (!_isLoadingMenu && _menuItems.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('No menu items yet — add your first one above.')),
+           if (!_isLoadingMenu)
+-            ..._menuItems.map((item) => SwitchListTile(
+-                  title: Text('${item['emoji'] ?? ''} ${item['name']} (Ksh ${item['price']})'),
++            ..._menuItems.map((item) => ListTile(
++                  leading: item['image_url'] != null
++                      ? ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network('${_auth.baseUrl}${item['image_url']}', width: 48, height: 48, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Text(item['emoji'] ?? '🛒', style: const TextStyle(fontSize: 28))))
++                      : Text(item['emoji'] ?? '🛒', style: const TextStyle(fontSize: 28)),
++                  title: Text('${item['name']} (Ksh ${item['price']})'),
+                   subtitle: Text((item['in_stock'] ?? true) ? "In Stock" : "Out of Stock"),
+-                  value: item['in_stock'] ?? true,
+-                  activeColor: Colors.green,
+-                  onChanged: (v) => _toggleStock(item['id'], v),
++                  trailing: Row(
++                    mainAxisSize: MainAxisSize.min,
++                    children: [
++                      IconButton(
++                        icon: const Icon(Icons.camera_alt, size: 20),
++                        onPressed: () async {
++                          final picker = ImagePicker();
++                          final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
++                          if (picked != null) {
++                            try {
++                              await _auth.uploadProductImage(item['id'], picked.path);
++                              await _loadMenu();
++                            } catch (e) {
++                              if (mounted) _showErrorSnack(context, e);
++                            }
++                          }
++                        },
++                      ),
++                      Switch(value: item['in_stock'] ?? true, activeColor: Colors.green, onChanged: (v) => _toggleStock(item['id'], v)),
++                    ],
++                  ),
+                 )),
+         ],
+       ),
+@@ -2390,6 +2855,12 @@ class _RiderDashboardScreenState extends State<RiderDashboardScreen> {
+             const SizedBox(height: 8),
+             Text('Estimated commission: Ksh ${commission.toStringAsFixed(2)}', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+             const SizedBox(height: 24),
++            OutlinedButton.icon(
++              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => ChatScreen(orderId: orderId, senderId: widget.riderId, senderRole: 'RIDER'))),
++              icon: const Icon(Icons.chat_bubble_outline, size: 18),
++              label: const Text('Message customer / vendor'),
++            ),
++            const SizedBox(height: 8),
+             ElevatedButton.icon(
+               style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+               onPressed: () async {
+@@ -2580,7 +3051,7 @@ class _RiderDashboardScreenState extends State<RiderDashboardScreen> {
+   }
+ 
+   Widget _buildInbox() {
+-    return const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('No message-center backend exists yet — this is a placeholder.', style: TextStyle(color: Colors.grey))));
++    return const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('Chat opens automatically from an active delivery — tap "Message customer / vendor" once you accept a job.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))));
+   }
+ 
+   Widget _buildProfile() {
+@@ -2621,9 +3092,16 @@ class AdminDashboardScreen extends StatefulWidget {
+ }
+ 
+ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
++  final AuthService _auth = AuthService();
+   String _selectedTab = "Overview";
+   bool _isLoadingQueues = true;
+ 
++  List<dynamic> _disputes = [];
++  List<dynamic> _fraudFlags = [];
++  List<dynamic> _zones = [];
++  List<dynamic> _supportTickets = [];
++  Map<String, dynamic>? _revenue;
++
+   @override
+   void initState() {
+     super.initState();
+@@ -2634,6 +3112,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+     setState(() => _isLoadingQueues = true);
+     try {
+       await context.read<RoleProvider>().refreshAdminQueues();
++      _disputes = await _auth.getDisputes();
++      _fraudFlags = await _auth.getFraudFlags();
++      _zones = await _auth.getZones();
++      _supportTickets = await _auth.getSupportTicketsAdmin();
++      _revenue = await _auth.getRevenueSummary();
+     } catch (e) {
+       if (mounted) _showErrorSnack(context, e);
+     } finally {
+@@ -2690,6 +3173,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+       content = _buildPayoutDashboard(cardColor, roleProvider, isMobile);
+     } else if (_selectedTab == "Overview") {
+       content = _buildOverview(cardColor, accentColor, isMobile);
++    } else if (_selectedTab == "Disputes/Refunds") {
++      content = _buildDisputes(cardColor, isMobile);
++    } else if (_selectedTab == "Fraud Flags") {
++      content = _buildFraudFlags(cardColor, isMobile);
++    } else if (_selectedTab == "City/Zone Config") {
++      content = _buildZoneConfig(cardColor, isMobile);
++    } else if (_selectedTab == "Support Queue") {
++      content = _buildSupportQueue(cardColor, isMobile);
+     } else {
+       content = Padding(
+         padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
+@@ -2711,6 +3202,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+   }
+ 
+   Widget _buildOverview(Color cardColor, Color accentColor, bool isMobile) {
++    final revenue = _revenue?['revenue_mtd']?.toStringAsFixed(2) ?? '0.00';
++    final orders = '${_revenue?['orders_mtd'] ?? 0}';
++    final avg = _revenue?['avg_order_value']?.toStringAsFixed(2) ?? '0.00';
++    final activeCustomers = '${_revenue?['active_customers'] ?? 0}';
++
+     return Padding(
+       padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
+       child: Column(
+@@ -2718,22 +3214,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+         children: [
+           if (!isMobile) const Text('Overview', style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+           if (!isMobile) const SizedBox(height: 24),
+-          const Text("Revenue/order analytics aren't backed by an aggregation endpoint yet — these are placeholders.", style: TextStyle(color: Colors.grey)),
+-          const SizedBox(height: 16),
+-          Row(children: [
+-            _buildKpiCard("PENDING VENDORS", "", cardColor),
+-            const SizedBox(width: 16),
+-            _buildKpiCard("PENDING RIDERS", "", cardColor),
+-          ]),
++          Wrap(
++            spacing: 16, runSpacing: 16,
++            children: [
++              _buildStatCard("REVENUE MTD", revenue, cardColor),
++              _buildStatCard("ORDERS MTD", orders, cardColor),
++              _buildStatCard("AVG ORDER VALUE", avg, cardColor),
++              _buildStatCard("ACTIVE CUSTOMERS", activeCustomers, cardColor),
++              _buildStatCard("PENDING VENDORS", '${context.watch<RoleProvider>().pendingVendors.length}', cardColor),
++              _buildStatCard("PENDING RIDERS", '${context.watch<RoleProvider>().pendingRiders.length}', cardColor),
++            ],
++          ),
+         ],
+       ),
+     );
+   }
+ 
+-  Widget _buildKpiCard(String title, String subText, Color cardColor) {
+-    final roleProvider = context.watch<RoleProvider>();
+-    final value = title.contains('VENDOR') ? '${roleProvider.pendingVendors.length}' : '${roleProvider.pendingRiders.length}';
+-    return Expanded(
++  Widget _buildStatCard(String title, String value, Color cardColor) {
++    return SizedBox(
++      width: 160,
+       child: GlassCard(
+         padding: const EdgeInsets.all(16),
+         borderRadius: BorderRadius.circular(12),
+@@ -2907,6 +3406,276 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+     );
+   }
+ 
++  Widget _buildDisputes(Color cardColor, bool isMobile) {
++    return Padding(
++      padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
++      child: Container(
++        width: double.infinity,
++        padding: const EdgeInsets.all(24),
++        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
++        child: Column(
++          crossAxisAlignment: CrossAxisAlignment.start,
++          children: [
++            const Text("Open Disputes", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
++            const SizedBox(height: 16),
++            if (_disputes.isEmpty)
++              const Text("No disputes raised.", style: TextStyle(color: Colors.grey))
++            else
++              Expanded(
++                child: ListView.builder(
++                  itemCount: _disputes.length,
++                  itemBuilder: (context, index) {
++                    final d = _disputes[index];
++                    final status = d['status'] as String;
++                    return ListTile(
++                      leading: Icon(Icons.gavel, color: status == 'OPEN' ? Colors.orange : Colors.grey),
++                      title: Text('Order #${d['order_id'].toString().substring(0, 8)} — ${d['reason']}', style: const TextStyle(color: Colors.white)),
++                      subtitle: Text('Raised by ${d['raiser']?['name'] ?? 'customer'} • $status', style: const TextStyle(color: Colors.grey)),
++                      trailing: status == 'OPEN'
++                          ? Row(
++                              mainAxisSize: MainAxisSize.min,
++                              children: [
++                                TextButton(onPressed: () => _resolveDisputeDialog(d['id'], 'RESOLVED'), child: const Text('Resolve')),
++                                TextButton(onPressed: () => _resolveDisputeDialog(d['id'], 'REJECTED'), child: const Text('Reject', style: TextStyle(color: Colors.red))),
++                              ],
++                            )
++                          : null,
++                    );
++                  },
++                ),
++              ),
++          ],
++        ),
++      ),
++    );
++  }
++
++  void _resolveDisputeDialog(String id, String status) {
++    final resolutionCtrl = TextEditingController();
++    showDialog(
++      context: context,
++      builder: (context) => AlertDialog(
++        title: Text(status == 'RESOLVED' ? 'Resolve dispute (issues refund)' : 'Reject dispute'),
++        content: _buildStyledTextField(resolutionCtrl, 'Resolution notes', false),
++        actions: [
++          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
++          ElevatedButton(
++            onPressed: () async {
++              Navigator.pop(context);
++              try {
++                await _auth.resolveDispute(id, status, resolutionCtrl.text);
++                await _loadQueues();
++              } catch (e) {
++                if (mounted) _showErrorSnack(context, e);
++              }
++            },
++            child: const Text('Confirm'),
++          ),
++        ],
++      ),
++    );
++  }
++
++  Widget _buildFraudFlags(Color cardColor, bool isMobile) {
++    return Padding(
++      padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
++      child: Container(
++        width: double.infinity,
++        padding: const EdgeInsets.all(24),
++        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
++        child: Column(
++          crossAxisAlignment: CrossAxisAlignment.start,
++          children: [
++            const Text("Unresolved Fraud Flags", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
++            const SizedBox(height: 16),
++            if (_fraudFlags.isEmpty)
++              const Text("No fraud flags — nothing suspicious detected.", style: TextStyle(color: Colors.grey))
++            else
++              Expanded(
++                child: ListView.builder(
++                  itemCount: _fraudFlags.length,
++                  itemBuilder: (context, index) {
++                    final f = _fraudFlags[index];
++                    return ListTile(
++                      leading: Icon(Icons.warning, color: f['severity'] == 'HIGH' ? Colors.red : (f['severity'] == 'MEDIUM' ? Colors.orange : Colors.yellow)),
++                      title: Text(f['reason'], style: const TextStyle(color: Colors.white)),
++                      subtitle: Text('Severity: ${f['severity']}', style: const TextStyle(color: Colors.grey)),
++                      trailing: ElevatedButton(
++                        onPressed: () async {
++                          try {
++                            await _auth.resolveFraudFlag(f['id']);
++                            await _loadQueues();
++                          } catch (e) {
++                            if (mounted) _showErrorSnack(context, e);
++                          }
++                        },
++                        child: const Text('Mark Resolved'),
++                      ),
++                    );
++                  },
++                ),
++              ),
++          ],
++        ),
++      ),
++    );
++  }
++
++  Widget _buildZoneConfig(Color cardColor, bool isMobile) {
++    return Padding(
++      padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
++      child: Container(
++        width: double.infinity,
++        padding: const EdgeInsets.all(24),
++        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
++        child: Column(
++          crossAxisAlignment: CrossAxisAlignment.start,
++          children: [
++            Row(
++              mainAxisAlignment: MainAxisAlignment.spaceBetween,
++              children: [
++                const Text("City/Zone Config", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
++                ElevatedButton.icon(onPressed: _showAddZoneDialog, icon: const Icon(Icons.add, size: 16), label: const Text('Add Zone')),
++              ],
++            ),
++            const SizedBox(height: 16),
++            if (_zones.isEmpty)
++              const Text("No zones configured yet.", style: TextStyle(color: Colors.grey))
++            else
++              Expanded(
++                child: ListView.builder(
++                  itemCount: _zones.length,
++                  itemBuilder: (context, index) {
++                    final z = _zones[index];
++                    return ListTile(
++                      leading: const Icon(Icons.map, color: Colors.blueAccent),
++                      title: Text('${z['zone_name']}, ${z['city']}', style: const TextStyle(color: Colors.white)),
++                      subtitle: Text('Surge: ${z['surge_multiplier']}x • Radius: ${z['delivery_radius_km']}km', style: const TextStyle(color: Colors.grey)),
++                      trailing: Switch(
++                        value: z['is_active'] ?? true,
++                        activeColor: Colors.green,
++                        onChanged: (v) async {
++                          try {
++                            await _auth.updateZone(z['id'], {'is_active': v});
++                            await _loadQueues();
++                          } catch (e) {
++                            if (mounted) _showErrorSnack(context, e);
++                          }
++                        },
++                      ),
++                    );
++                  },
++                ),
++              ),
++          ],
++        ),
++      ),
++    );
++  }
++
++  void _showAddZoneDialog() {
++    final cityCtrl = TextEditingController();
++    final zoneCtrl = TextEditingController();
++    final surgeCtrl = TextEditingController(text: '1.0');
++    final radiusCtrl = TextEditingController(text: '5.0');
++    showDialog(
++      context: context,
++      builder: (context) => AlertDialog(
++        title: const Text('Add Zone'),
++        content: Column(
++          mainAxisSize: MainAxisSize.min,
++          children: [
++            _buildStyledTextField(cityCtrl, 'City', false),
++            const SizedBox(height: 8),
++            _buildStyledTextField(zoneCtrl, 'Zone name', false),
++            const SizedBox(height: 8),
++            _buildStyledTextField(surgeCtrl, 'Surge multiplier', false),
++            const SizedBox(height: 8),
++            _buildStyledTextField(radiusCtrl, 'Delivery radius (km)', false),
++          ],
++        ),
++        actions: [
++          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
++          ElevatedButton(
++            onPressed: () async {
++              if (cityCtrl.text.isEmpty || zoneCtrl.text.isEmpty) return;
++              Navigator.pop(context);
++              try {
++                await _auth.createZone(cityCtrl.text, zoneCtrl.text, surgeMultiplier: double.tryParse(surgeCtrl.text), radiusKm: double.tryParse(radiusCtrl.text));
++                await _loadQueues();
++              } catch (e) {
++                if (mounted) _showErrorSnack(context, e);
++              }
++            },
++            child: const Text('Save'),
++          ),
++        ],
++      ),
++    );
++  }
++
++  Widget _buildSupportQueue(Color cardColor, bool isMobile) {
++    return Padding(
++      padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
++      child: Container(
++        width: double.infinity,
++        padding: const EdgeInsets.all(24),
++        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
++        child: Column(
++          crossAxisAlignment: CrossAxisAlignment.start,
++          children: [
++            const Text("Open Support Tickets", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
++            const SizedBox(height: 16),
++            if (_supportTickets.isEmpty)
++              const Text("No open tickets.", style: TextStyle(color: Colors.grey))
++            else
++              Expanded(
++                child: ListView.builder(
++                  itemCount: _supportTickets.length,
++                  itemBuilder: (context, index) {
++                    final t = _supportTickets[index];
++                    return ListTile(
++                      leading: const Icon(Icons.support_agent, color: Colors.blueAccent),
++                      title: Text(t['subject'], style: const TextStyle(color: Colors.white)),
++                      subtitle: Text('${t['user']?['name'] ?? 'User'}: ${t['message']}', style: const TextStyle(color: Colors.grey)),
++                      isThreeLine: true,
++                      trailing: Row(
++                        mainAxisSize: MainAxisSize.min,
++                        children: [
++                          TextButton(
++                            onPressed: () async {
++                              try {
++                                await _auth.updateSupportTicketAdmin(t['id'], 'IN_PROGRESS');
++                                await _loadQueues();
++                              } catch (e) {
++                                if (mounted) _showErrorSnack(context, e);
++                              }
++                            },
++                            child: const Text('In Progress'),
++                          ),
++                          TextButton(
++                            onPressed: () async {
++                              try {
++                                await _auth.updateSupportTicketAdmin(t['id'], 'CLOSED');
++                                await _loadQueues();
++                              } catch (e) {
++                                if (mounted) _showErrorSnack(context, e);
++                              }
++                            },
++                            child: const Text('Close'),
++                          ),
++                        ],
++                      ),
++                    );
++                  },
++                ),
++              ),
++          ],
++        ),
++      ),
++    );
++  }
++
+   Widget _buildNavItem(IconData icon, String title, bool isSelected, Color accentColor, bool isMobile, {VoidCallback? onTap}) {
+     return InkWell(
+       onTap: () {
+@@ -2940,3 +3709,137 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+     );
+   }
+ }
++
++// ============================================================================
++// MESSAGE CENTER — real-time chat scoped to one order. Loads history via
++// REST (GET /chat/:orderId/history), then joins a Socket.IO room and both
++// sends and receives live messages through the same ChatGateway used by
++// every role (customer/vendor/rider all use this same screen).
++// ============================================================================
++class ChatScreen extends StatefulWidget {
++  final String orderId;
++  final String senderId;
++  final String senderRole; // "CUSTOMER" | "VENDOR" | "RIDER"
++  const ChatScreen({super.key, required this.orderId, required this.senderId, required this.senderRole});
++
++  @override
++  State<ChatScreen> createState() => _ChatScreenState();
++}
++
++class _ChatScreenState extends State<ChatScreen> {
++  final AuthService _auth = AuthService();
++  final TextEditingController _messageCtrl = TextEditingController();
++  final ScrollController _scrollCtrl = ScrollController();
++  List<dynamic> _messages = [];
++  bool _isLoading = true;
++  IO.Socket? _socket;
++
++  @override
++  void initState() {
++    super.initState();
++    _loadHistory();
++    _connectSocket();
++  }
++
++  Future<void> _loadHistory() async {
++    try {
++      _messages = await _auth.getChatHistory(widget.orderId);
++    } catch (e) {}
++    setState(() => _isLoading = false);
++    _scrollToBottom();
++  }
++
++  void _connectSocket() {
++    _socket = IO.io(_auth.baseUrl, IO.OptionBuilder().setTransports(['websocket']).build());
++    _socket!.onConnect((_) {
++      _socket!.emit('join_order_chat', {'orderId': widget.orderId});
++    });
++    _socket!.on('new_message', (data) {
++      setState(() => _messages.add(data));
++      _scrollToBottom();
++    });
++  }
++
++  void _scrollToBottom() {
++    WidgetsBinding.instance.addPostFrameCallback((_) {
++      if (_scrollCtrl.hasClients) _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
++    });
++  }
++
++  void _send() {
++    if (_messageCtrl.text.trim().isEmpty) return;
++    _socket?.emit('send_message', {
++      'orderId': widget.orderId,
++      'senderId': widget.senderId,
++      'senderRole': widget.senderRole,
++      'message': _messageCtrl.text.trim(),
++    });
++    _messageCtrl.clear();
++  }
++
++  @override
++  void dispose() {
++    _socket?.disconnect();
++    _socket?.dispose();
++    super.dispose();
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    return Scaffold(
++      appBar: AppBar(title: Text('Order #${widget.orderId.substring(0, 8)}')),
++      body: Column(
++        children: [
++          Expanded(
++            child: _isLoading
++                ? const Center(child: CircularProgressIndicator())
++                : _messages.isEmpty
++                    ? const Center(child: Text('No messages yet — say hello!'))
++                    : ListView.builder(
++                        controller: _scrollCtrl,
++                        padding: const EdgeInsets.all(16),
++                        itemCount: _messages.length,
++                        itemBuilder: (context, index) {
++                          final m = _messages[index];
++                          final isMe = m['sender_id'] == widget.senderId;
++                          return Align(
++                            alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
++                            child: Container(
++                              margin: const EdgeInsets.symmetric(vertical: 4),
++                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
++                              decoration: BoxDecoration(color: isMe ? Colors.green[700] : Colors.grey[300], borderRadius: BorderRadius.circular(16)),
++                              child: Column(
++                                crossAxisAlignment: CrossAxisAlignment.start,
++                                children: [
++                                  if (!isMe) Text(m['sender_role'] ?? '', style: TextStyle(fontSize: 10, color: Colors.grey[700], fontWeight: FontWeight.bold)),
++                                  Text(m['message'] ?? '', style: TextStyle(color: isMe ? Colors.white : Colors.black)),
++                                ],
++                              ),
++                            ),
++                          );
++                        },
++                      ),
++          ),
++          SafeArea(
++            child: Padding(
++              padding: const EdgeInsets.all(12.0),
++              child: Row(
++                children: [
++                  Expanded(
++                    child: TextField(
++                      controller: _messageCtrl,
++                      decoration: InputDecoration(hintText: 'Type a message...', filled: true, fillColor: Colors.grey[200], border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(horizontal: 16)),
++                      onSubmitted: (_) => _send(),
++                    ),
++                  ),
++                  const SizedBox(width: 8),
++                  CircleAvatar(backgroundColor: Colors.green[700], child: IconButton(icon: const Icon(Icons.send, color: Colors.white, size: 18), onPressed: _send)),
++                ],
++              ),
++            ),
++          ),
++        ],
++      ),
++    );
++  }
++}
+diff --git a/greengrocer_app/lib/services/auth_service.dart b/greengrocer_app/lib/services/auth_service.dart
+index 6679fb7..c7ee200 100644
+--- a/greengrocer_app/lib/services/auth_service.dart
++++ b/greengrocer_app/lib/services/auth_service.dart
+@@ -275,11 +275,127 @@ class AuthService {
+     return _decodeOrThrow(response);
+   }
+ 
+-  Future<void> addMenuItem(String vendorId, String name, int price, String emoji, String unit) async {
+-    await _post('/menu-items', {'vendor_id': vendorId, 'name': name, 'price': price, 'emoji': emoji, 'unit': unit});
++  Future<Map<String, dynamic>> addMenuItem(String vendorId, String name, int price, String emoji, String unit) async {
++    final data = await _post('/menu-items', {'vendor_id': vendorId, 'name': name, 'price': price, 'emoji': emoji, 'unit': unit});
++    return Map<String, dynamic>.from(data);
+   }
+ 
+   Future<void> setMenuItemStock(String menuItemId, bool inStock) async {
+     await _patch('/menu-items/$menuItemId/stock', {'in_stock': inStock});
+   }
++
++  Future<String> uploadProductImage(String productId, String filePath) async {
++    final prefs = await SharedPreferences.getInstance();
++    final token = prefs.getString('token') ?? '';
++    var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/menu-items/$productId/image'));
++    request.headers['Authorization'] = 'Bearer $token';
++    request.files.add(await http.MultipartFile.fromPath('image', filePath));
++    var streamedResponse = await request.send();
++    var response = await http.Response.fromStream(streamedResponse);
++    final data = _decodeOrThrow(response);
++    return data['image_url'] as String;
++  }
++
++  // ===========================================================================
++  // CUSTOMER WALLET
++  // ===========================================================================
++
++  Future<double> getUserWallet(String userId) async {
++    final data = await _get('/users/$userId/wallet');
++    return (data['balance'] as num).toDouble();
++  }
++
++  Future<double> topUpWallet(String userId, double amount) async {
++    final data = await _post('/users/$userId/wallet/top-up', {'amount': amount});
++    return (data['balance'] as num).toDouble();
++  }
++
++  // ===========================================================================
++  // FAVOURITES
++  // ===========================================================================
++
++  Future<List<dynamic>> getFavorites(String userId) async => await _get('/users/$userId/favorites');
++  Future<void> addFavorite(String userId, String vendorId) async => await _post('/users/$userId/favorites', {'vendor_id': vendorId});
++  Future<void> removeFavorite(String userId, String vendorId) async {
++    final response = await http.delete(Uri.parse('$baseUrl/users/$userId/favorites/$vendorId'), headers: await _authHeaders());
++    _decodeOrThrow(response);
++  }
++
++  // ===========================================================================
++  // FAMILY SHARING
++  // ===========================================================================
++
++  Future<List<dynamic>> getFamily(String userId) async => await _get('/users/$userId/family');
++  Future<void> inviteFamilyMember(String userId, String phone, {double? spendingLimit}) async {
++    await _post('/users/$userId/family', {'phone': phone, 'spending_limit': spendingLimit});
++  }
++  Future<void> removeFamilyMember(String userId, String memberId) async {
++    final response = await http.delete(Uri.parse('$baseUrl/users/$userId/family/$memberId'), headers: await _authHeaders());
++    _decodeOrThrow(response);
++  }
++
++  // ===========================================================================
++  // SUPPORT TICKETS (customer-side create/view; feeds Admin's Support Queue)
++  // ===========================================================================
++
++  Future<void> createSupportTicket(String userId, String subject, String message) async {
++    await _post('/users/$userId/support-tickets', {'subject': subject, 'message': message});
++  }
++  Future<List<dynamic>> getMySupportTickets(String userId) async => await _get('/users/$userId/support-tickets');
++
++  // ===========================================================================
++  // PROMOTIONS
++  // ===========================================================================
++
++  Future<List<dynamic>> getActivePromotions() async {
++    final response = await http.get(Uri.parse('$baseUrl/promotions'));
++    return _decodeOrThrow(response);
++  }
++
++  Future<Map<String, dynamic>> validatePromoCode(String code) async {
++    final response = await http.get(Uri.parse('$baseUrl/promotions/validate/$code'));
++    return Map<String, dynamic>.from(_decodeOrThrow(response));
++  }
++
++  // ===========================================================================
++  // ADMIN: DISPUTES / FRAUD / ZONES / SUPPORT / REVENUE
++  // ===========================================================================
++
++  Future<List<dynamic>> getDisputes() async => await _get('/admin/disputes');
++  Future<void> resolveDispute(String id, String status, String resolution) async {
++    await _patch('/admin/disputes/$id/resolve', {'status': status, 'resolution': resolution});
++  }
++
++  Future<List<dynamic>> getFraudFlags() async => await _get('/admin/fraud-flags');
++  Future<void> resolveFraudFlag(String id) async => await _patch('/admin/fraud-flags/$id/resolve');
++
++  Future<List<dynamic>> getZones() async => await _get('/admin/zones');
++  Future<void> createZone(String city, String zoneName, {double? surgeMultiplier, double? radiusKm}) async {
++    await _post('/admin/zones', {'city': city, 'zone_name': zoneName, 'surge_multiplier': surgeMultiplier, 'delivery_radius_km': radiusKm});
++  }
++  Future<void> updateZone(String id, Map<String, dynamic> data) async => await _patch('/admin/zones/$id', data);
++
++  Future<List<dynamic>> getSupportTicketsAdmin() async => await _get('/admin/support-tickets');
++  Future<void> updateSupportTicketAdmin(String id, String status) async {
++    await _patch('/admin/support-tickets/$id', {'status': status});
++  }
++
++  Future<Map<String, dynamic>> getRevenueSummary() async {
++    return Map<String, dynamic>.from(await _get('/admin/revenue-summary'));
++  }
++
++  // ===========================================================================
++  // DISPUTES (customer-raised)
++  // ===========================================================================
++
++  Future<void> raiseDispute(String orderId, String reason) async {
++    await _post('/orders/$orderId/dispute', {'reason': reason});
++  }
++
++  // ===========================================================================
++  // CHAT (message center — history via REST, live messages via Socket.IO
++  // handled directly in ChatScreen)
++  // ===========================================================================
++
++  Future<List<dynamic>> getChatHistory(String orderId) async => await _get('/chat/$orderId/history');
+ }
