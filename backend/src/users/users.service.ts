@@ -10,7 +10,16 @@ export class UsersService {
     if (!user) throw new NotFoundException('User not found');
     return user;
   }
-
+  async updateProfile(id: string, data: { name?: string; email?: string; profile_image?: string }) {
+    return this.prisma.user.update({
+      where: { id },
+      data: {
+        ...(data.name && { name: data.name }),
+        ...(data.email && { email: data.email }),
+        ...(data.profile_image && { profile_image: data.profile_image }),
+      },
+    });
+  }
   // --- Customer cash wallet ---
   async getWallet(userId: string) {
     const user = await this.findOne(userId);

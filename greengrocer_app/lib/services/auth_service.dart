@@ -18,6 +18,7 @@ class AuthService {
     return {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $token',
+      'ngrok-skip-browser-warning': 'true', // 👈 Bypasses Ngrok warning globally
     };
   }
 
@@ -56,51 +57,73 @@ class AuthService {
   }
 
   // ===========================================================================
-  // AUTH
+  // AUTH & OTP
   // ===========================================================================
 
-  Future login(String phone) async {
-    try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/auth/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'phone': phone}),
-      );
-      if (response.statusCode == 201 || response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('token', data['access_token']);
-        await prefs.setString('role', data['role']);
-        await prefs.setString('user_id', data['user_id'] ?? '');
-        await prefs.setString('name', data['name'] ?? '');
-        await prefs.setString('vendor_id', data['vendor_id'] ?? '');
-        await prefs.setString('vendor_status', data['vendor_status'] ?? '');
-        await prefs.setString('rider_id', data['rider_id'] ?? '');
-        await prefs.setString('rider_status', data['rider_status'] ?? '');
-        await prefs.setString('phone', phone);
-        return data['role'];
-      } else {
-        return jsonDecode(response.body)['message'];
-      }
-    } catch (e) {
-      return 'Connection error';
-    }
+  Future<void> requestOtp(String phone) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/request-otp'),
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: jsonEncode({'phone': phone}),
+    );
+    _decodeOrThrow(response);
+  }
+
+  Future<Map<String, dynamic>> verifyOtp(String phone, String code) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/verify-otp'),
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: jsonEncode({
+        'phone': phone,
+        'code': code,
+      }),
+    );
+    
+    final data = _decodeOrThrow(response);
+    
+    // Save session data upon successful verification
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('token', data['access_token']);
+    await prefs.setString('role', data['role']);
+    await prefs.setString('user_id', data['user_id'] ?? '');
+    await prefs.setString('name', data['name'] ?? '');
+    await prefs.setString('vendor_id', data['vendor_id'] ?? '');
+    await prefs.setString('vendor_status', data['vendor_status'] ?? '');
+    await prefs.setString('rider_id', data['rider_id'] ?? '');
+    await prefs.setString('rider_status', data['rider_status'] ?? '');
+    await prefs.setString('phone', phone);
+    
+    return Map<String, dynamic>.from(data);
   }
 
   Future registerCustomer(String phone, String name) async {
     final response = await http.post(
       Uri.parse('$baseUrl/auth/register/customer'),
-      headers: {'Content-Type': 'application/json'},
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
       body: jsonEncode({'phone': phone, 'name': name}),
     );
-    if (response.statusCode == 201 || response.statusCode == 200) return await login(phone);
-    return null;
+    if (response.statusCode == 201 || response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    _decodeOrThrow(response);
   }
 
   Future registerVendor(String phone, String name, String shopName, String location) async {
     final response = await http.post(
       Uri.parse('$baseUrl/auth/register/vendor'),
-      headers: {'Content-Type': 'application/json'},
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
       body: jsonEncode({'phone': phone, 'name': name, 'shopName': shopName, 'location': location}),
     );
     return response.statusCode == 201 || response.statusCode == 200;
@@ -108,6 +131,7 @@ class AuthService {
 
   Future registerRider(String phone, String name, String vehicleType, String plateNumber, String idFrontPath, String idBackPath) async {
     var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/auth/register/rider'));
+    request.headers['ngrok-skip-browser-warning'] = 'true';
     request.fields['phone'] = phone;
     request.fields['name'] = name;
     request.fields['vehicleType'] = vehicleType;
@@ -147,6 +171,24 @@ class AuthService {
   Future<String?> getRiderStatus() async {
     final s = (await SharedPreferences.getInstance()).getString('rider_status');
     return (s == null || s.isEmpty) ? null : s;
+  }
+
+  // ===========================================================================
+  // PROFILE MANAGEMENT
+  // ===========================================================================
+
+  Future<Map<String, dynamic>> updateProfile(String userId, {String? name, String? email, String? profileImageUrl}) async {
+    final data = await _patch('/users/$userId/profile', {
+      if (name != null) 'name': name,
+      if (email != null) 'email': email,
+      if (profileImageUrl != null) 'profile_image': profileImageUrl,
+    });
+    
+    if (name != null) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('name', name);
+    }
+    return Map<String, dynamic>.from(data);
   }
 
   // ===========================================================================
@@ -206,16 +248,24 @@ class AuthService {
     required List<Map<String, dynamic>> items,
     required int subtotal,
     required String idempotencyKey,
+    double? customerLat,
+    double? customerLng,
+    double? vendorLat,
+    double? vendorLng,
   }) async {
     final data = await _post('/orders/checkout', {
       'items': items,
       'subtotal': subtotal,
       'idempotencyKey': idempotencyKey,
+      if (customerLat != null) 'customerLat': customerLat,
+      if (customerLng != null) 'customerLng': customerLng,
+      if (vendorLat != null) 'vendorLat': vendorLat,
+      if (vendorLng != null) 'vendorLng': vendorLng,
     });
     return Map<String, dynamic>.from(data);
   }
 
-  Future<List<dynamic>> getOrderHistory() async => await _get('/orders/history');
+  Future<List<dynamic>> getOrderHistory({int page = 1, int limit = 10}) async => await _get('/orders/history?page=$page&limit=$limit');
   Future<List<dynamic>> getVendorOrders() async => await _get('/orders/vendor-dashboard');
 
   Future<void> updateOrderStatus(String orderId, String status) async {
@@ -256,8 +306,11 @@ class AuthService {
   // PRODUCTS
   // ===========================================================================
 
-  Future<List<dynamic>> getProducts() async {
-    final response = await http.get(Uri.parse('$baseUrl/products'));
+  Future<List<dynamic>> getProducts({int page = 1, int limit = 20}) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/products?page=$page&limit=$limit'),
+      headers: {'ngrok-skip-browser-warning': 'true'}, 
+    );
     return _decodeOrThrow(response);
   }
 
@@ -266,12 +319,14 @@ class AuthService {
   }
 
   // ===========================================================================
-  // MENU ITEMS (vendor's own menu, scoped by vendor_id — distinct from the
-  // global /products catalog above)
+  // MENU ITEMS (vendor's own menu)
   // ===========================================================================
 
   Future<List<dynamic>> getVendorMenuItems(String vendorId) async {
-    final response = await http.get(Uri.parse('$baseUrl/menu-items/vendor/$vendorId'));
+    final response = await http.get(
+      Uri.parse('$baseUrl/menu-items/vendor/$vendorId'),
+      headers: {'ngrok-skip-browser-warning': 'true'},
+    );
     return _decodeOrThrow(response);
   }
 
@@ -289,6 +344,7 @@ class AuthService {
     final token = prefs.getString('token') ?? '';
     var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/menu-items/$productId/image'));
     request.headers['Authorization'] = 'Bearer $token';
+    request.headers['ngrok-skip-browser-warning'] = 'true';
     request.files.add(await http.MultipartFile.fromPath('image', filePath));
     var streamedResponse = await request.send();
     var response = await http.Response.fromStream(streamedResponse);
@@ -335,7 +391,7 @@ class AuthService {
   }
 
   // ===========================================================================
-  // SUPPORT TICKETS (customer-side create/view; feeds Admin's Support Queue)
+  // SUPPORT TICKETS
   // ===========================================================================
 
   Future<void> createSupportTicket(String userId, String subject, String message) async {
@@ -348,12 +404,18 @@ class AuthService {
   // ===========================================================================
 
   Future<List<dynamic>> getActivePromotions() async {
-    final response = await http.get(Uri.parse('$baseUrl/promotions'));
+    final response = await http.get(
+      Uri.parse('$baseUrl/promotions'),
+      headers: {'ngrok-skip-browser-warning': 'true'},
+    );
     return _decodeOrThrow(response);
   }
 
   Future<Map<String, dynamic>> validatePromoCode(String code) async {
-    final response = await http.get(Uri.parse('$baseUrl/promotions/validate/$code'));
+    final response = await http.get(
+      Uri.parse('$baseUrl/promotions/validate/$code'),
+      headers: {'ngrok-skip-browser-warning': 'true'},
+    );
     return Map<String, dynamic>.from(_decodeOrThrow(response));
   }
 
@@ -393,8 +455,7 @@ class AuthService {
   }
 
   // ===========================================================================
-  // CHAT (message center — history via REST, live messages via Socket.IO
-  // handled directly in ChatScreen)
+  // CHAT
   // ===========================================================================
 
   Future<List<dynamic>> getChatHistory(String orderId) async => await _get('/chat/$orderId/history');

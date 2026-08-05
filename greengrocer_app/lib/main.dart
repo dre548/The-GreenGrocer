@@ -15,7 +15,61 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'services/auth_service.dart';
 import 'package:flutter/foundation.dart';
+import 'screens/auth/otp_verify_screen.dart'; // Adjust path if your folder structure differs
 
+
+Future<List<LatLng>> getRouteCoordinates(LatLng origin, LatLng destination) async {
+  final apiKey = dotenv.env['DIRECTIONS_API_KEY'] ?? '';
+  final url = 'https://maps.googleapis.com/maps/api/directions/json?'
+      'origin=${origin.latitude},${origin.longitude}'
+      '&destination=${destination.latitude},${destination.longitude}'
+      '&key=$apiKey';
+
+  final response = await http.get(
+    Uri.parse(url),
+    headers: {'ngrok-skip-browser-warning': 'true'},
+  );
+
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body);
+    if ((data['routes'] as List).isNotEmpty) {
+      final points = data['routes'][0]['overview_polyline']['points'] as String;
+      return _decodePolyline(points);
+    }
+  }
+  return [];
+}
+
+// Helper to decode Google's encoded polyline string into LatLng points
+List<LatLng> _decodePolyline(String encoded) {
+  List<LatLng> polyline = [];
+  int index = 0, len = encoded.length;
+  int lat = 0, lng = 0;
+
+  while (index < len) {
+    int b, shift = 0, result = 0;
+    do {
+      b = encoded.codeUnitAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+    lat += dlat;
+
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.codeUnitAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+    lng += dlng;
+
+    polyline.add(LatLng(lat / 1E5, lng / 1E5));
+  }
+  return polyline;
+}
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: ".env");
@@ -541,14 +595,50 @@ class _LoginScreenState extends State<LoginScreen> {
     if (_phoneController.text.length < 9) return;
     FocusScope.of(context).unfocus();
     setState(() => isLoading = true);
-    final result = await _auth.login('+254${_phoneController.text}');
-    await _handleLoginResult(result);
+
+    try {
+      final phoneNumber = '+254${_phoneController.text.trim()}';
+      
+      // 1. Request the OTP from the backend
+      await _auth.requestOtp(phoneNumber);
+
+      if (!mounted) return;
+      setState(() => isLoading = false);
+
+      // 2. Navigate to the OTP verification screen
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => OtpVerifyScreen(phone: phoneNumber),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
   }
 
   void _quickLogin(String testPhone) async {
     setState(() => isLoading = true);
-    final result = await _auth.login(testPhone);
-    await _handleLoginResult(result);
+    try {
+      // System shortcuts (ADMIN_SYSTEM, VENDOR_SYSTEM, etc.) 
+      // verify using a dummy code to bypass physical SMS during testing
+      final data = await _auth.verifyOtp(testPhone, '0000'); 
+      
+      if (!mounted) return;
+      
+      // Navigate straight to home based on role
+      Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Quick Login Error: $e')),
+      );
+    }
   }
 
   @override

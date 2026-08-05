@@ -1,12 +1,16 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { Injectable, HttpException, HttpStatus, Inject, UnauthorizedException } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
+import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
+import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
 export class AuthService {
   constructor(
     private prisma: PrismaService,
-    private jwtService: JwtService
+    private jwtService: JwtService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
   // --- 1. SECURE LOGIN (Checks Approvals & Handles Admin Shortcuts!) ---
@@ -38,10 +42,6 @@ export class AuthService {
           include: { vendorProfile: true, riderProfile: true }
         });
 
-        // Fixed: the shortcut used to create a User with role VENDOR/RIDER
-        // but no matching Vendor/Rider row, so wallet/payout/order-status
-        // endpoints (which look up by vendor.id / rider.id) had nothing to
-        // find. Now the test accounts get a real, pre-approved profile too.
         if (assignedRole === 'VENDOR') {
           await this.prisma.vendor.create({
             data: {
@@ -65,13 +65,11 @@ export class AuthService {
           });
         }
 
-        // Re-fetch with the profile now attached
         user = await this.prisma.user.findUnique({
           where: { id: user.id },
           include: { vendorProfile: true, riderProfile: true },
         });
       } else {
-        // Standard users must go through the registration screens
         throw new UnauthorizedException('Account not found. Please register first.');
       }
     }
@@ -90,10 +88,6 @@ export class AuthService {
 
     const payload = { sub: user.id, phone: user.phone, role: user.role };
 
-    // Fixed: this used to return only { access_token, role } — the app had
-    // no way to call GET /vendors/:id/wallet or GET /riders/:id/wallet
-    // afterward, since it never learned the vendor/rider row's own id
-    // (distinct from the user's id). Now it's included whenever it exists.
     return {
       access_token: await this.jwtService.signAsync(payload),
       role: user.role,
@@ -119,12 +113,6 @@ export class AuthService {
   }
 
   // --- 3. VENDOR SIGNUP ---
-  // Fixed: this used to require a brand-new phone number every time,
-  // meaning an existing Customer could never "apply to become a Vendor"
-  // from their own account — they'd have to register a second phone
-  // number as a completely separate person. Now it attaches a Vendor
-  // profile to the existing user if there is one (as long as they don't
-  // already have one), and only creates a new user if the phone is new.
   async registerVendor(data: { phone: string, name: string, shopName: string, location: string }) {
     let user = await this.prisma.user.findUnique({
       where: { phone: data.phone },
@@ -155,8 +143,6 @@ export class AuthService {
   }
 
   // --- 4. RIDER SIGNUP ---
-  // Same fix as registerVendor above — attaches to an existing account
-  // rather than demanding an unused phone number.
   async registerRider(data: { phone: string, name: string, vehicleType: string, plateNumber: string }, idFrontUrl: string, idBackUrl: string) {
     let user = await this.prisma.user.findUnique({
       where: { phone: data.phone },
@@ -186,5 +172,50 @@ export class AuthService {
     });
 
     return { message: 'Rider registration successful! Please wait for admin approval.' };
+  }
+
+  // --- 5. AFRICA'S TALKING OTP INTEGRATION ---
+  async requestOtp(phone: string) {
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    await this.cacheManager.set(`otp_${phone}`, otp, 300000);
+
+    try {
+      const params = new URLSearchParams();
+      params.append('username', process.env.AT_USERNAME || 'sandbox');
+      params.append('to', phone);
+      params.append('message', `Your Greengrocer verification code is ${otp}. It expires in 5 minutes.`);
+
+      const response = await axios.post(
+        'https://api.africastalking.com/version1/messaging',
+        params,
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            apikey: process.env.AT_API_KEY,
+            Accept: 'application/json',
+          },
+        }
+      );
+      
+      console.log('AT SMS Response:', response.data);
+      return { success: true, message: 'OTP sent successfully' };
+    } catch (error: any) {
+      console.error('AT SMS Error Details:', error.response?.data || error.message);
+      throw new HttpException(
+        error.response?.data?.SMSMessageData?.Message || 'Failed to send SMS', 
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  async verifyOtp(phone: string, code: string) {
+    const cachedOtp = await this.cacheManager.get(`otp_${phone}`);
+
+    if (!cachedOtp || cachedOtp !== code) {
+      throw new HttpException('Invalid or expired OTP', HttpStatus.UNAUTHORIZED);
+    }
+
+    await this.cacheManager.del(`otp_${phone}`);
+    return this.generateToken(phone);
   }
 }

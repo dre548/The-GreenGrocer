@@ -1,16 +1,16 @@
 import { Injectable } from '@nestjs/common';
-// Ensure this import path matches where your PrismaService is located
-import { PrismaService } from '../prisma/prisma.service'; 
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class ProductsService {
   constructor(private prisma: PrismaService) {}
 
-  async getAllProducts() {
+  async getAllProducts(page: number = 1, limit: number = 20) {
+    const skip = (page - 1) * limit;
     return this.prisma.product.findMany({
-      orderBy: {
-        created_at: 'asc',
-      },
+      skip: skip,
+      take: limit,
+      orderBy: { id: 'desc' }, 
     });
   }
 }

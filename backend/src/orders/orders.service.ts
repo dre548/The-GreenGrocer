@@ -2,21 +2,24 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service'; 
 import { OrderStatus } from '@prisma/client'; 
 import { OrdersGateway } from './orders.gateway'; 
-import { PaymentsService } from '../payments/payments.service'; // <-- Imported Payments
+import { PaymentsService } from '../payments/payments.service';
+import { LogisticsService } from './logistics.service'; // <-- Imported Logistics
 
 @Injectable()
 export class OrdersService {
   constructor(
     private prisma: PrismaService,
     private gateway: OrdersGateway,
-    private paymentsService: PaymentsService // <-- Injected Payments
+    private paymentsService: PaymentsService, // <-- Added missing comma!
+    private logistics: LogisticsService
   ) {}
 
-  // --- FUNCTION 1: CHECKOUT (UPGRADED WITH M-PESA & IDEMPOTENCY) ---
+  // --- FUNCTION 1: CHECKOUT (UPGRADED WITH DYNAMIC LOGISTICS) ---
   async processCheckout(cartData: any, phone: string) {
-    const { items, subtotal, idempotencyKey } = cartData;
+    // Extract coordinates if the frontend sends them
+    const { items, subtotal, idempotencyKey, customerLat, customerLng, vendorLat, vendorLng } = cartData;
 
-    // 1. Idempotency Check: Prevent double-charging if the user double-taps "Pay"
+    // 1. Idempotency Check: Prevent double-charging
     if (idempotencyKey) {
       const existingOrder = await this.prisma.order.findUnique({
         where: { id: idempotencyKey }
@@ -45,28 +48,40 @@ export class OrdersService {
       });
     }
 
-    // 4. Calculate Totals
-    const deliveryFee = 50; 
+    // 4. Calculate Totals (DYNAMIC LOGISTICS)
+    let deliveryFee = 50; // Base flat-fee fallback
+    
+    // If the frontend provided coordinates, calculate the exact driving fee
+    if (customerLat && customerLng && vendorLat && vendorLng) {
+      try {
+        const routing = await this.logistics.calculateDeliveryFee(
+          vendorLat, vendorLng, 
+          customerLat, customerLng
+        );
+        deliveryFee = routing.deliveryFee;
+      } catch (error) {
+        console.error('Logistics fee calculation failed, using base fee:', error);
+      }
+    }
+
     const total = subtotal + deliveryFee;
 
     // 5. Create Order
     const order = await this.prisma.order.create({
       data: {
-        id: idempotencyKey || undefined, // Use the Flutter UUID if provided
+        id: idempotencyKey || undefined,
         customer_id: customer.id,
         vendor_id: vendor.id,
         items: items, 
         subtotal: subtotal,
         delivery_fee: deliveryFee,
         total: total,
-        payment_method: 'M-PESA', // Updated from COD!
+        payment_method: 'M-PESA',
         status: 'PLACED'
       },
     });
 
-    // 6. Log the charge in the ledger (PENDING until the M-Pesa callback
-    // confirms it — see the payments callback handler you'll need to add
-    // for CALLBACK_URL to actually flip this to COMPLETED).
+    // 6. Log the charge in the ledger
     await this.prisma.transaction.create({
       data: {
         order_id: order.id,
@@ -79,13 +94,12 @@ export class OrdersService {
       },
     });
 
-    // 7. Trigger the Daraja STK Push!
+    // 7. Trigger the Daraja STK Push
     try {
       await this.paymentsService.initiateStkPush(phone, total, order.id);
       console.log(`STK Push initiated successfully for order ${order.id}`);
     } catch (error) {
       console.error('STK Push failed to initiate:', error);
-      // We don't throw an error here, so the order still saves even if Daraja is acting up
     }
 
     return { success: true, orderId: order.id, message: 'STK Push sent to your phone!' };
@@ -138,9 +152,6 @@ export class OrdersService {
   }
 
   // --- FUNCTION 6: GET AVAILABLE DELIVERIES (RIDER) ---
-  // Fixed: was filtering on ACCEPTED_BY_VENDOR, which just means the vendor
-  // confirmed the order — it might still be being prepared. A rider should
-  // only see orders the vendor has actually marked READY_FOR_PICKUP.
   async getAvailableDeliveries() {
     return this.prisma.order.findMany({
       where: { status: 'READY_FOR_PICKUP', rider_id: null },
@@ -167,7 +178,7 @@ export class OrdersService {
           party_id: order.vendor_id,
           amount: order.total,
           method: order.payment_method,
-          status: 'PENDING', // an admin/ops process actually issues the M-Pesa reversal
+          status: 'PENDING', 
         },
       }),
     ]);
