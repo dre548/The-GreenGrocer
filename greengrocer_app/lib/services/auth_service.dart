@@ -275,11 +275,127 @@ class AuthService {
     return _decodeOrThrow(response);
   }
 
-  Future<void> addMenuItem(String vendorId, String name, int price, String emoji, String unit) async {
-    await _post('/menu-items', {'vendor_id': vendorId, 'name': name, 'price': price, 'emoji': emoji, 'unit': unit});
+  Future<Map<String, dynamic>> addMenuItem(String vendorId, String name, int price, String emoji, String unit) async {
+    final data = await _post('/menu-items', {'vendor_id': vendorId, 'name': name, 'price': price, 'emoji': emoji, 'unit': unit});
+    return Map<String, dynamic>.from(data);
   }
 
   Future<void> setMenuItemStock(String menuItemId, bool inStock) async {
     await _patch('/menu-items/$menuItemId/stock', {'in_stock': inStock});
   }
+
+  Future<String> uploadProductImage(String productId, String filePath) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token') ?? '';
+    var request = http.MultipartRequest('POST', Uri.parse('$baseUrl/menu-items/$productId/image'));
+    request.headers['Authorization'] = 'Bearer $token';
+    request.files.add(await http.MultipartFile.fromPath('image', filePath));
+    var streamedResponse = await request.send();
+    var response = await http.Response.fromStream(streamedResponse);
+    final data = _decodeOrThrow(response);
+    return data['image_url'] as String;
+  }
+
+  // ===========================================================================
+  // CUSTOMER WALLET
+  // ===========================================================================
+
+  Future<double> getUserWallet(String userId) async {
+    final data = await _get('/users/$userId/wallet');
+    return (data['balance'] as num).toDouble();
+  }
+
+  Future<double> topUpWallet(String userId, double amount) async {
+    final data = await _post('/users/$userId/wallet/top-up', {'amount': amount});
+    return (data['balance'] as num).toDouble();
+  }
+
+  // ===========================================================================
+  // FAVOURITES
+  // ===========================================================================
+
+  Future<List<dynamic>> getFavorites(String userId) async => await _get('/users/$userId/favorites');
+  Future<void> addFavorite(String userId, String vendorId) async => await _post('/users/$userId/favorites', {'vendor_id': vendorId});
+  Future<void> removeFavorite(String userId, String vendorId) async {
+    final response = await http.delete(Uri.parse('$baseUrl/users/$userId/favorites/$vendorId'), headers: await _authHeaders());
+    _decodeOrThrow(response);
+  }
+
+  // ===========================================================================
+  // FAMILY SHARING
+  // ===========================================================================
+
+  Future<List<dynamic>> getFamily(String userId) async => await _get('/users/$userId/family');
+  Future<void> inviteFamilyMember(String userId, String phone, {double? spendingLimit}) async {
+    await _post('/users/$userId/family', {'phone': phone, 'spending_limit': spendingLimit});
+  }
+  Future<void> removeFamilyMember(String userId, String memberId) async {
+    final response = await http.delete(Uri.parse('$baseUrl/users/$userId/family/$memberId'), headers: await _authHeaders());
+    _decodeOrThrow(response);
+  }
+
+  // ===========================================================================
+  // SUPPORT TICKETS (customer-side create/view; feeds Admin's Support Queue)
+  // ===========================================================================
+
+  Future<void> createSupportTicket(String userId, String subject, String message) async {
+    await _post('/users/$userId/support-tickets', {'subject': subject, 'message': message});
+  }
+  Future<List<dynamic>> getMySupportTickets(String userId) async => await _get('/users/$userId/support-tickets');
+
+  // ===========================================================================
+  // PROMOTIONS
+  // ===========================================================================
+
+  Future<List<dynamic>> getActivePromotions() async {
+    final response = await http.get(Uri.parse('$baseUrl/promotions'));
+    return _decodeOrThrow(response);
+  }
+
+  Future<Map<String, dynamic>> validatePromoCode(String code) async {
+    final response = await http.get(Uri.parse('$baseUrl/promotions/validate/$code'));
+    return Map<String, dynamic>.from(_decodeOrThrow(response));
+  }
+
+  // ===========================================================================
+  // ADMIN: DISPUTES / FRAUD / ZONES / SUPPORT / REVENUE
+  // ===========================================================================
+
+  Future<List<dynamic>> getDisputes() async => await _get('/admin/disputes');
+  Future<void> resolveDispute(String id, String status, String resolution) async {
+    await _patch('/admin/disputes/$id/resolve', {'status': status, 'resolution': resolution});
+  }
+
+  Future<List<dynamic>> getFraudFlags() async => await _get('/admin/fraud-flags');
+  Future<void> resolveFraudFlag(String id) async => await _patch('/admin/fraud-flags/$id/resolve');
+
+  Future<List<dynamic>> getZones() async => await _get('/admin/zones');
+  Future<void> createZone(String city, String zoneName, {double? surgeMultiplier, double? radiusKm}) async {
+    await _post('/admin/zones', {'city': city, 'zone_name': zoneName, 'surge_multiplier': surgeMultiplier, 'delivery_radius_km': radiusKm});
+  }
+  Future<void> updateZone(String id, Map<String, dynamic> data) async => await _patch('/admin/zones/$id', data);
+
+  Future<List<dynamic>> getSupportTicketsAdmin() async => await _get('/admin/support-tickets');
+  Future<void> updateSupportTicketAdmin(String id, String status) async {
+    await _patch('/admin/support-tickets/$id', {'status': status});
+  }
+
+  Future<Map<String, dynamic>> getRevenueSummary() async {
+    return Map<String, dynamic>.from(await _get('/admin/revenue-summary'));
+  }
+
+  // ===========================================================================
+  // DISPUTES (customer-raised)
+  // ===========================================================================
+
+  Future<void> raiseDispute(String orderId, String reason) async {
+    await _post('/orders/$orderId/dispute', {'reason': reason});
+  }
+
+  // ===========================================================================
+  // CHAT (message center — history via REST, live messages via Socket.IO
+  // handled directly in ChatScreen)
+  // ===========================================================================
+
+  Future<List<dynamic>> getChatHistory(String orderId) async => await _get('/chat/$orderId/history');
 }

@@ -13,6 +13,8 @@ import { DeliveriesModule } from './deliveries/deliveries.module';
 import { ProductsModule } from './products/products.module';
 import { AdminModule } from './admin/admin.module';
 import { RidersModule } from './riders/riders.module';
+import { PromotionsModule } from './promotions/promotions.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -35,6 +37,8 @@ import { RidersModule } from './riders/riders.module';
     DeliveriesModule,
     ProductsModule,
     RidersModule,
+    PromotionsModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [AppService],

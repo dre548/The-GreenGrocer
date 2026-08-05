@@ -12,6 +12,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'services/auth_service.dart';
 import 'package:flutter/foundation.dart';
 
@@ -96,15 +97,17 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   late final AnimationController _controller;
   late final Animation<double> _fade;
   late final Animation<double> _scale;
+  late final Animation<double> _textFade;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
-    _fade = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
-    _scale = Tween<double>(begin: 0.85, end: 1.0).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+    _fade = CurvedAnimation(parent: _controller, curve: const Interval(0.0, 0.6, curve: Curves.easeIn));
+    _scale = Tween<double>(begin: 0.7, end: 1.0).animate(CurvedAnimation(parent: _controller, curve: const Interval(0.0, 0.75, curve: Curves.easeOutBack)));
+    _textFade = CurvedAnimation(parent: _controller, curve: const Interval(0.45, 1.0, curve: Curves.easeIn));
     _controller.forward();
-    Timer(const Duration(milliseconds: 1600), () {
+    Timer(const Duration(milliseconds: 2000), () {
       if (mounted) {
         Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
       }
@@ -117,7 +120,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     super.dispose();
   }
 
-@override
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
@@ -131,31 +134,55 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           ),
         ),
         child: Center(
-          child: FadeTransition(
-            opacity: _fade,
-            child: ScaleTransition(
-              scale: _scale,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 96,
-                    height: 96,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FadeTransition(
+                opacity: _fade,
+                child: ScaleTransition(
+                  scale: _scale,
+                  child: Container(
+                    width: 148,
+                    height: 148,
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 8))],
+                      shape: BoxShape.circle,
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 28, offset: const Offset(0, 10))],
                     ),
-                    // 👇 This is the only line that changed 👇
-                    child: Center(child: Image.asset('assets/images/logo.png', width: 70, height: 70)),
+                    padding: const EdgeInsets.all(22),
+                    child: Image.asset('assets/images/logo_mark.png', fit: BoxFit.contain),
                   ),
-                  const SizedBox(height: 20),
-                  const Text('The Greengrocer', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-                  const SizedBox(height: 6),
-                  Text('fresh, fast, to your door', style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 13)),
-                ],
+                ),
               ),
-            ),
+              const SizedBox(height: 28),
+              FadeTransition(
+                opacity: _textFade,
+                child: Column(
+                  children: [
+                    RichText(
+                      text: const TextSpan(
+                        style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 0.3, fontFamily: 'Roboto'),
+                        children: [
+                          TextSpan(text: 'The ', style: TextStyle(color: Colors.white)),
+                          TextSpan(text: 'Green', style: TextStyle(color: Colors.white)),
+                          TextSpan(text: 'grocer', style: TextStyle(color: Color(0xFF8BC34A))),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text('fresh, fast, to your door', style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 13, letterSpacing: 0.5)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 56),
+              FadeTransition(
+                opacity: _textFade,
+                child: SizedBox(
+                  width: 28, height: 28,
+                  child: CircularProgressIndicator(strokeWidth: 2.4, valueColor: AlwaysStoppedAnimation(Colors.white.withOpacity(0.6))),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -421,6 +448,44 @@ void _showErrorSnack(BuildContext context, Object error) {
   );
 }
 
+void _showSupportTicketDialog(BuildContext context) {
+  final subjectCtrl = TextEditingController();
+  final messageCtrl = TextEditingController();
+  showDialog(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Contact Support'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildStyledTextField(subjectCtrl, 'Subject', Theme.of(context).brightness == Brightness.dark),
+          const SizedBox(height: 12),
+          _buildStyledTextField(messageCtrl, 'How can we help?', Theme.of(context).brightness == Brightness.dark),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        ElevatedButton(
+          onPressed: () async {
+            if (subjectCtrl.text.isEmpty || messageCtrl.text.isEmpty) return;
+            Navigator.pop(context);
+            try {
+              final userId = await AuthService().getUserId();
+              if (userId != null) {
+                await AuthService().createSupportTicket(userId, subjectCtrl.text, messageCtrl.text);
+                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ticket submitted — our team will follow up.')));
+              }
+            } catch (e) {
+              if (context.mounted) _showErrorSnack(context, e);
+            }
+          },
+          child: const Text('Submit'),
+        ),
+      ],
+    ),
+  );
+}
+
 // ============================================================================
 // LOGIN SCREEN — real network call every time, no client-side bypass.
 // Includes a small "quick test accounts" section that hits the backend's
@@ -497,7 +562,17 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 40),
+              const SizedBox(height: 24),
+              Center(
+                child: isDark
+                    ? Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                        child: Image.asset('assets/images/logo_full.png', height: 90, fit: BoxFit.contain),
+                      )
+                    : Image.asset('assets/images/logo_full.png', height: 110, fit: BoxFit.contain),
+              ),
+              const SizedBox(height: 32),
               Text('Enter your mobile number', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
               const SizedBox(height: 24),
               ProfessionalPhoneInput(phoneController: _phoneController),
@@ -1051,11 +1126,44 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   }
 }
 
-class SearchScreen extends StatelessWidget {
+class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
+  @override
+  State<SearchScreen> createState() => _SearchScreenState();
+}
+
+class _SearchScreenState extends State<SearchScreen> {
+  final AuthService _auth = AuthService();
+  final TextEditingController _queryCtrl = TextEditingController();
+  List<dynamic> _allProducts = [];
+  List<dynamic> _filtered = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _isLoading = true);
+    try {
+      _allProducts = await _auth.getProducts();
+      _filtered = _allProducts;
+    } catch (e) {}
+    setState(() => _isLoading = false);
+  }
+
+  void _onQueryChanged(String query) {
+    setState(() {
+      _filtered = _allProducts.where((p) => (p['name'] as String? ?? '').toLowerCase().contains(query.toLowerCase())).toList();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cart = Provider.of<CartProvider>(context, listen: false);
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16.0),
@@ -1066,10 +1174,40 @@ class SearchScreen extends StatelessWidget {
             Container(
               height: 45,
               decoration: BoxDecoration(color: isDark ? Colors.grey[800] : Colors.grey[200], borderRadius: BorderRadius.circular(8)),
-              child: const TextField(decoration: InputDecoration(hintText: 'Search The Greengrocer', prefixIcon: Icon(Icons.search), border: InputBorder.none)),
+              child: TextField(
+                controller: _queryCtrl,
+                onChanged: _onQueryChanged,
+                decoration: const InputDecoration(hintText: 'Search The Greengrocer', prefixIcon: Icon(Icons.search), border: InputBorder.none),
+              ),
             ),
-            const SizedBox(height: 24),
-            Text('Product search filters by name/category aren\'t wired to the API yet.', style: TextStyle(color: Colors.grey[600])),
+            const SizedBox(height: 16),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _filtered.isEmpty
+                      ? const Center(child: Text('No matching products.'))
+                      : ListView.builder(
+                          itemCount: _filtered.length,
+                          itemBuilder: (context, index) {
+                            final p = _filtered[index];
+                            final bool inStock = p['in_stock'] ?? true;
+                            return ListTile(
+                              leading: Text(p['emoji'] ?? '🛒', style: const TextStyle(fontSize: 28)),
+                              title: Text(p['name'] ?? ''),
+                              subtitle: Text('Ksh ${p['price']} ${p['unit'] ?? ''}'),
+                              trailing: inStock
+                                  ? IconButton(
+                                      icon: const Icon(Icons.add_circle, color: Colors.green),
+                                      onPressed: () {
+                                        cart.addItem(p['name'], p['price'], p['emoji'] ?? '🛒');
+                                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${p['name']} added!'), duration: const Duration(seconds: 1)));
+                                      },
+                                    )
+                                  : const Text('Out of stock', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                            );
+                          },
+                        ),
+            ),
           ],
         ),
       ),
@@ -1264,7 +1402,7 @@ class ProfileScreen extends StatelessWidget {
                 _settingsTile('Account settings', Icons.settings_outlined, textColor, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AccountSettingsScreen()))),
                 _settingsTile('Family', Icons.group_outlined, textColor, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const FamilyScreen()))),
                 _settingsTile('Promotions', Icons.local_offer_outlined, textColor, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PromotionsScreen()))),
-                _settingsTile('Help', Icons.help_outline, textColor, () => _showFeatureDialog(context, "Support", "Support chat isn't wired to a real backend yet.")),
+                _settingsTile('Help', Icons.help_outline, textColor, () => _showSupportTicketDialog(context)),
                 ListTile(
                   leading: const Icon(Icons.logout, color: Colors.red),
                   title: const Text('Logout', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w500, fontSize: 16)),
@@ -1301,49 +1439,180 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
-class FavouritesScreen extends StatelessWidget {
+class FavouritesScreen extends StatefulWidget {
   const FavouritesScreen({super.key});
+  @override
+  State<FavouritesScreen> createState() => _FavouritesScreenState();
+}
+
+class _FavouritesScreenState extends State<FavouritesScreen> {
+  final AuthService _auth = AuthService();
+  List<dynamic> _favorites = [];
+  bool _isLoading = true;
+  String? _userId;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _isLoading = true);
+    _userId = await _auth.getUserId();
+    if (_userId != null) {
+      try {
+        _favorites = await _auth.getFavorites(_userId!);
+      } catch (e) {}
+    }
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _remove(String vendorId) async {
+    if (_userId == null) return;
+    try {
+      await _auth.removeFavorite(_userId!, vendorId);
+      await _load();
+    } catch (e) {
+      if (mounted) _showErrorSnack(context, e);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Favourites")),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.favorite_border, size: 80, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            const Text("Favourites aren't backed by the API yet", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-          ],
-        ),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _favorites.isEmpty
+                ? ListView(
+                    children: [
+                      Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(height: 120),
+                            Icon(Icons.favorite_border, size: 80, color: Colors.grey[400]),
+                            const SizedBox(height: 16),
+                            const Text("No favourites yet", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                          ],
+                        ),
+                      ),
+                    ],
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _favorites.length,
+                    itemBuilder: (context, index) {
+                      final fav = _favorites[index];
+                      return ListTile(
+                        leading: const Icon(Icons.store, color: Colors.green),
+                        title: Text('Vendor ${fav['vendor_id'].toString().substring(0, 8)}'),
+                        trailing: IconButton(icon: const Icon(Icons.favorite, color: Colors.red), onPressed: () => _remove(fav['vendor_id'])),
+                      );
+                    },
+                  ),
       ),
     );
   }
 }
 
-class WalletScreen extends StatelessWidget {
+class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
+  @override
+  State<WalletScreen> createState() => _WalletScreenState();
+}
+
+class _WalletScreenState extends State<WalletScreen> {
+  final AuthService _auth = AuthService();
+  double _balance = 0.0;
+  bool _isLoading = true;
+  String? _userId;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _isLoading = true);
+    _userId = await _auth.getUserId();
+    if (_userId != null) {
+      try {
+        _balance = await _auth.getUserWallet(_userId!);
+      } catch (e) {}
+    }
+    setState(() => _isLoading = false);
+  }
+
+  void _showTopUpDialog() {
+    final amountCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Cash'),
+        content: _buildStyledTextField(amountCtrl, 'Amount (Ksh)', Theme.of(context).brightness == Brightness.dark),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              final amount = double.tryParse(amountCtrl.text);
+              if (amount == null || _userId == null) return;
+              Navigator.pop(context);
+              try {
+                _balance = await _auth.topUpWallet(_userId!, amount);
+                setState(() {});
+              } catch (e) {
+                if (mounted) _showErrorSnack(context, e);
+              }
+            },
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Wallet")),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(color: Colors.green[700], borderRadius: BorderRadius.circular(16)),
-            child: const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("Customer cash-wallet isn't part of the backend yet", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                SizedBox(height: 8),
-                Text("Checkout goes straight through M-Pesa STK push instead.", style: TextStyle(color: Colors.white70)),
-              ],
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(color: Colors.green[700], borderRadius: BorderRadius.circular(16)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("Cash Balance", style: TextStyle(color: Colors.white70, fontSize: 16)),
+                        const SizedBox(height: 8),
+                        Text(_balance.toStringAsFixed(2), style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.green[700]),
+                          onPressed: _showTopUpDialog,
+                          child: const Text("Add Cash"),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('Note: this credits your wallet directly for now — a real M-Pesa top-up flow (STK push into the wallet) can replace this later.', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -1415,6 +1684,33 @@ class _OrdersTabScreenState extends State<OrdersTabScreen> {
     );
   }
 
+  void _showDisputeDialog(String orderId) {
+    final reasonCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Report a problem'),
+        content: _buildStyledTextField(reasonCtrl, 'What went wrong?', Theme.of(context).brightness == Brightness.dark),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              if (reasonCtrl.text.isEmpty) return;
+              Navigator.pop(context);
+              try {
+                await AuthService().raiseDispute(orderId, reasonCtrl.text);
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Reported — our team will review it.')));
+              } catch (e) {
+                if (mounted) _showErrorSnack(context, e);
+              }
+            },
+            child: const Text('Submit'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1469,6 +1765,26 @@ class _OrdersTabScreenState extends State<OrdersTabScreen> {
                                     child: const Text('Rate this order'),
                                   ),
                                 ],
+                                if (!['DELIVERED', 'CANCELLED'].contains(status)) ...[
+                                  const SizedBox(height: 8),
+                                  OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 40)),
+                                    onPressed: () async {
+                                      final userId = await AuthService().getUserId();
+                                      if (context.mounted && userId != null) {
+                                        Navigator.push(context, MaterialPageRoute(builder: (context) => ChatScreen(orderId: order['id'], senderId: userId, senderRole: 'CUSTOMER')));
+                                      }
+                                    },
+                                    icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                                    label: const Text('Chat about this order'),
+                                  ),
+                                ],
+                                const SizedBox(height: 8),
+                                TextButton.icon(
+                                  onPressed: () => _showDisputeDialog(order['id']),
+                                  icon: const Icon(Icons.flag_outlined, size: 16, color: Colors.red),
+                                  label: const Text('Report a problem', style: TextStyle(color: Colors.red, fontSize: 13)),
+                                ),
                               ],
                             ),
                           );
@@ -1495,24 +1811,157 @@ class AccountSettingsScreen extends StatelessWidget {
   }
 }
 
-class FamilyScreen extends StatelessWidget {
+class FamilyScreen extends StatefulWidget {
   const FamilyScreen({super.key});
+  @override
+  State<FamilyScreen> createState() => _FamilyScreenState();
+}
+
+class _FamilyScreenState extends State<FamilyScreen> {
+  final AuthService _auth = AuthService();
+  List<dynamic> _members = [];
+  bool _isLoading = true;
+  String? _userId;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _isLoading = true);
+    _userId = await _auth.getUserId();
+    if (_userId != null) {
+      try {
+        _members = await _auth.getFamily(_userId!);
+      } catch (e) {}
+    }
+    setState(() => _isLoading = false);
+  }
+
+  void _showInviteDialog() {
+    final phoneCtrl = TextEditingController();
+    final limitCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Invite family member'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildStyledTextField(phoneCtrl, 'Their phone (e.g. +2547XXXXXXXX)', Theme.of(context).brightness == Brightness.dark),
+            const SizedBox(height: 12),
+            _buildStyledTextField(limitCtrl, 'Monthly spending limit (optional, Ksh)', Theme.of(context).brightness == Brightness.dark),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              if (phoneCtrl.text.isEmpty) return;
+              Navigator.pop(context);
+              try {
+                await _auth.inviteFamilyMember(_userId!, phoneCtrl.text, spendingLimit: double.tryParse(limitCtrl.text));
+                await _load();
+              } catch (e) {
+                if (mounted) _showErrorSnack(context, e);
+              }
+            },
+            child: const Text('Invite'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Family")),
-      body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('Family accounts aren\'t part of the backend design yet.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  ElevatedButton.icon(onPressed: _showInviteDialog, icon: const Icon(Icons.person_add), label: const Text('Invite family member')),
+                  const SizedBox(height: 16),
+                  if (_members.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('No family members added yet.')),
+                  ..._members.map((m) => ListTile(
+                        leading: const Icon(Icons.person, color: Colors.blueGrey),
+                        title: Text(m['member']?['name'] ?? 'Family member'),
+                        subtitle: Text(m['spending_limit'] != null ? 'Limit: Ksh ${m['spending_limit']}' : 'No spending limit set'),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                          onPressed: () async {
+                            try {
+                              await _auth.removeFamilyMember(_userId!, m['member_id']);
+                              await _load();
+                            } catch (e) {
+                              if (mounted) _showErrorSnack(context, e);
+                            }
+                          },
+                        ),
+                      )),
+                ],
+              ),
+            ),
     );
   }
 }
 
-class PromotionsScreen extends StatelessWidget {
+class PromotionsScreen extends StatefulWidget {
   const PromotionsScreen({super.key});
+  @override
+  State<PromotionsScreen> createState() => _PromotionsScreenState();
+}
+
+class _PromotionsScreenState extends State<PromotionsScreen> {
+  final AuthService _auth = AuthService();
+  List<dynamic> _promos = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _isLoading = true);
+    try {
+      _promos = await _auth.getActivePromotions();
+    } catch (e) {}
+    setState(() => _isLoading = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Promotions")),
-      body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('No promo/voucher system exists on the backend yet.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: _promos.isEmpty
+                  ? ListView(children: const [Padding(padding: EdgeInsets.all(24), child: Text('No active promotions right now.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))])
+                  : ListView(
+                      padding: const EdgeInsets.all(16),
+                      children: _promos
+                          .map((p) => Card(
+                                margin: const EdgeInsets.only(bottom: 16),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.all(16),
+                                  leading: const Icon(Icons.local_offer, color: Colors.green, size: 40),
+                                  title: Text(p['description'] ?? p['code'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                  subtitle: Text('Code: ${p['code']}'),
+                                ),
+                              ))
+                          .toList(),
+                    ),
+            ),
     );
   }
 }
@@ -1994,41 +2443,64 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
     final priceCtrl = TextEditingController();
     final unitCtrl = TextEditingController(text: 'kg');
     final emojiCtrl = TextEditingController(text: '🛒');
+    File? pickedImage;
+    final picker = ImagePicker();
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Menu Item'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildStyledTextField(nameCtrl, 'Item name', Theme.of(context).brightness == Brightness.dark),
-              const SizedBox(height: 12),
-              _buildStyledTextField(priceCtrl, 'Price (Ksh)', Theme.of(context).brightness == Brightness.dark),
-              const SizedBox(height: 12),
-              _buildStyledTextField(unitCtrl, 'Unit (e.g. kg, bunch)', Theme.of(context).brightness == Brightness.dark),
-              const SizedBox(height: 12),
-              _buildStyledTextField(emojiCtrl, 'Emoji', Theme.of(context).brightness == Brightness.dark),
-            ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Add Menu Item'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                GestureDetector(
+                  onTap: () async {
+                    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+                    if (picked != null) setDialogState(() => pickedImage = File(picked.path));
+                  },
+                  child: Container(
+                    height: 120, width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200], borderRadius: BorderRadius.circular(12),
+                      image: pickedImage != null ? DecorationImage(image: FileImage(pickedImage!), fit: BoxFit.cover) : null,
+                    ),
+                    child: pickedImage == null ? const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.add_a_photo, size: 32, color: Colors.grey), Text('Add a photo (optional)', style: TextStyle(color: Colors.grey))]) : null,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _buildStyledTextField(nameCtrl, 'Item name', Theme.of(context).brightness == Brightness.dark),
+                const SizedBox(height: 12),
+                _buildStyledTextField(priceCtrl, 'Price (Ksh)', Theme.of(context).brightness == Brightness.dark),
+                const SizedBox(height: 12),
+                _buildStyledTextField(unitCtrl, 'Unit (e.g. kg, bunch)', Theme.of(context).brightness == Brightness.dark),
+                const SizedBox(height: 12),
+                _buildStyledTextField(emojiCtrl, 'Emoji', Theme.of(context).brightness == Brightness.dark),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                final price = int.tryParse(priceCtrl.text);
+                if (nameCtrl.text.isEmpty || price == null) return;
+                Navigator.pop(context);
+                try {
+                  final created = await _auth.addMenuItem(widget.vendorId, nameCtrl.text, price, emojiCtrl.text, unitCtrl.text);
+                  if (pickedImage != null && created['id'] != null) {
+                    await _auth.uploadProductImage(created['id'], pickedImage!.path);
+                  }
+                  await _loadMenu();
+                } catch (e) {
+                  if (mounted) _showErrorSnack(context, e);
+                }
+              },
+              child: const Text('Save Item'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final price = int.tryParse(priceCtrl.text);
-              if (nameCtrl.text.isEmpty || price == null) return;
-              Navigator.pop(context);
-              try {
-                await _auth.addMenuItem(widget.vendorId, nameCtrl.text, price, emojiCtrl.text, unitCtrl.text);
-                await _loadMenu();
-              } catch (e) {
-                if (mounted) _showErrorSnack(context, e);
-              }
-            },
-            child: const Text('Save Item'),
-          ),
-        ],
       ),
     );
   }
@@ -2079,7 +2551,7 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
-        title: const Text('Vendor Dashboard'),
+        title: Row(mainAxisSize: MainAxisSize.min, children: [Image.asset('assets/images/logo_mark.png', width: 26, height: 26), const SizedBox(width: 10), const Text('Vendor Dashboard')]),
         actions: [
           Row(children: [Text(isStoreOpen ? "Online" : "Offline", style: TextStyle(color: isStoreOpen ? Colors.green : Colors.grey, fontWeight: FontWeight.bold)), Switch(value: isStoreOpen, activeColor: Colors.green, onChanged: _toggleStoreOpen)]),
           IconButton(
@@ -2175,6 +2647,8 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
                 Row(children: [
                   ElevatedButton(style: ElevatedButton.styleFrom(minimumSize: const Size(0, 40)), onPressed: () => onAction(order), child: Text(actionText)),
                   if (onManage != null) ...[const SizedBox(width: 8), TextButton(onPressed: () => onManage(order), child: const Text("Cancel"))],
+                  const Spacer(),
+                  IconButton(icon: const Icon(Icons.chat_bubble_outline), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => ChatScreen(orderId: order['id'], senderId: widget.vendorId, senderRole: 'VENDOR')))),
                 ]),
               ],
             ),
@@ -2196,7 +2670,13 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
           child: ListTile(
             title: Text('Order #${order['id'].toString().substring(0, 8)}'),
             subtitle: Text(labels[order['status']] ?? order['status']),
-            trailing: Text('Ksh ${order['total']}'),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Ksh ${order['total']}'),
+                IconButton(icon: const Icon(Icons.chat_bubble_outline, size: 20), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => ChatScreen(orderId: order['id'], senderId: widget.vendorId, senderRole: 'VENDOR')))),
+              ],
+            ),
           ),
         );
       },
@@ -2214,12 +2694,33 @@ class _VendorDashboardScreenState extends State<VendorDashboardScreen> {
           if (_isLoadingMenu) const Center(child: CircularProgressIndicator()),
           if (!_isLoadingMenu && _menuItems.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('No menu items yet — add your first one above.')),
           if (!_isLoadingMenu)
-            ..._menuItems.map((item) => SwitchListTile(
-                  title: Text('${item['emoji'] ?? ''} ${item['name']} (Ksh ${item['price']})'),
+            ..._menuItems.map((item) => ListTile(
+                  leading: item['image_url'] != null
+                      ? ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network('${_auth.baseUrl}${item['image_url']}', width: 48, height: 48, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Text(item['emoji'] ?? '🛒', style: const TextStyle(fontSize: 28))))
+                      : Text(item['emoji'] ?? '🛒', style: const TextStyle(fontSize: 28)),
+                  title: Text('${item['name']} (Ksh ${item['price']})'),
                   subtitle: Text((item['in_stock'] ?? true) ? "In Stock" : "Out of Stock"),
-                  value: item['in_stock'] ?? true,
-                  activeColor: Colors.green,
-                  onChanged: (v) => _toggleStock(item['id'], v),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.camera_alt, size: 20),
+                        onPressed: () async {
+                          final picker = ImagePicker();
+                          final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+                          if (picked != null) {
+                            try {
+                              await _auth.uploadProductImage(item['id'], picked.path);
+                              await _loadMenu();
+                            } catch (e) {
+                              if (mounted) _showErrorSnack(context, e);
+                            }
+                          }
+                        },
+                      ),
+                      Switch(value: item['in_stock'] ?? true, activeColor: Colors.green, onChanged: (v) => _toggleStock(item['id'], v)),
+                    ],
+                  ),
                 )),
         ],
       ),
@@ -2390,6 +2891,12 @@ class _RiderDashboardScreenState extends State<RiderDashboardScreen> {
             const SizedBox(height: 8),
             Text('Estimated commission: Ksh ${commission.toStringAsFixed(2)}', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
             const SizedBox(height: 24),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => ChatScreen(orderId: orderId, senderId: widget.riderId, senderRole: 'RIDER'))),
+              icon: const Icon(Icons.chat_bubble_outline, size: 18),
+              label: const Text('Message customer / vendor'),
+            ),
+            const SizedBox(height: 8),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
               onPressed: () async {
@@ -2506,7 +3013,7 @@ class _RiderDashboardScreenState extends State<RiderDashboardScreen> {
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
-        title: const Text('Driver App'),
+        title: Row(mainAxisSize: MainAxisSize.min, children: [Image.asset('assets/images/logo_mark.png', width: 26, height: 26), const SizedBox(width: 10), const Text('Driver App')]),
         actions: [
           Row(children: [
             Text(isOnline ? "Online" : "Offline", style: TextStyle(color: isOnline ? Colors.green : Colors.grey, fontWeight: FontWeight.bold)),
@@ -2580,7 +3087,7 @@ class _RiderDashboardScreenState extends State<RiderDashboardScreen> {
   }
 
   Widget _buildInbox() {
-    return const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('No message-center backend exists yet — this is a placeholder.', style: TextStyle(color: Colors.grey))));
+    return const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('Chat opens automatically from an active delivery — tap "Message customer / vendor" once you accept a job.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))));
   }
 
   Widget _buildProfile() {
@@ -2621,8 +3128,15 @@ class AdminDashboardScreen extends StatefulWidget {
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+  final AuthService _auth = AuthService();
   String _selectedTab = "Overview";
   bool _isLoadingQueues = true;
+
+  List<dynamic> _disputes = [];
+  List<dynamic> _fraudFlags = [];
+  List<dynamic> _zones = [];
+  List<dynamic> _supportTickets = [];
+  Map<String, dynamic>? _revenue;
 
   @override
   void initState() {
@@ -2634,6 +3148,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     setState(() => _isLoadingQueues = true);
     try {
       await context.read<RoleProvider>().refreshAdminQueues();
+      _disputes = await _auth.getDisputes();
+      _fraudFlags = await _auth.getFraudFlags();
+      _zones = await _auth.getZones();
+      _supportTickets = await _auth.getSupportTicketsAdmin();
+      _revenue = await _auth.getRevenueSummary();
     } catch (e) {
       if (mounted) _showErrorSnack(context, e);
     } finally {
@@ -2655,7 +3174,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(padding: const EdgeInsets.all(24.0), child: Row(children: [Icon(Icons.dashboard, color: accentColor, size: 28), const SizedBox(width: 12), const Text("Internal Ops", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold))])),
+          Padding(padding: const EdgeInsets.all(20.0), child: Row(children: [Image.asset('assets/images/logo_mark.png', width: 32, height: 32), const SizedBox(width: 12), const Text("Internal Ops", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold))])),
           Expanded(
             child: ListView(
               children: [
@@ -2690,6 +3209,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       content = _buildPayoutDashboard(cardColor, roleProvider, isMobile);
     } else if (_selectedTab == "Overview") {
       content = _buildOverview(cardColor, accentColor, isMobile);
+    } else if (_selectedTab == "Disputes/Refunds") {
+      content = _buildDisputes(cardColor, isMobile);
+    } else if (_selectedTab == "Fraud Flags") {
+      content = _buildFraudFlags(cardColor, isMobile);
+    } else if (_selectedTab == "City/Zone Config") {
+      content = _buildZoneConfig(cardColor, isMobile);
+    } else if (_selectedTab == "Support Queue") {
+      content = _buildSupportQueue(cardColor, isMobile);
     } else {
       content = Padding(
         padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
@@ -2711,6 +3238,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   Widget _buildOverview(Color cardColor, Color accentColor, bool isMobile) {
+    final revenue = _revenue?['revenue_mtd']?.toStringAsFixed(2) ?? '0.00';
+    final orders = '${_revenue?['orders_mtd'] ?? 0}';
+    final avg = _revenue?['avg_order_value']?.toStringAsFixed(2) ?? '0.00';
+    final activeCustomers = '${_revenue?['active_customers'] ?? 0}';
+
     return Padding(
       padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
       child: Column(
@@ -2718,22 +3250,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         children: [
           if (!isMobile) const Text('Overview', style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
           if (!isMobile) const SizedBox(height: 24),
-          const Text("Revenue/order analytics aren't backed by an aggregation endpoint yet — these are placeholders.", style: TextStyle(color: Colors.grey)),
-          const SizedBox(height: 16),
-          Row(children: [
-            _buildKpiCard("PENDING VENDORS", "", cardColor),
-            const SizedBox(width: 16),
-            _buildKpiCard("PENDING RIDERS", "", cardColor),
-          ]),
+          Wrap(
+            spacing: 16, runSpacing: 16,
+            children: [
+              _buildStatCard("REVENUE MTD", revenue, cardColor),
+              _buildStatCard("ORDERS MTD", orders, cardColor),
+              _buildStatCard("AVG ORDER VALUE", avg, cardColor),
+              _buildStatCard("ACTIVE CUSTOMERS", activeCustomers, cardColor),
+              _buildStatCard("PENDING VENDORS", '${context.watch<RoleProvider>().pendingVendors.length}', cardColor),
+              _buildStatCard("PENDING RIDERS", '${context.watch<RoleProvider>().pendingRiders.length}', cardColor),
+            ],
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildKpiCard(String title, String subText, Color cardColor) {
-    final roleProvider = context.watch<RoleProvider>();
-    final value = title.contains('VENDOR') ? '${roleProvider.pendingVendors.length}' : '${roleProvider.pendingRiders.length}';
-    return Expanded(
+  Widget _buildStatCard(String title, String value, Color cardColor) {
+    return SizedBox(
+      width: 160,
       child: GlassCard(
         padding: const EdgeInsets.all(16),
         borderRadius: BorderRadius.circular(12),
@@ -2907,6 +3442,276 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
+  Widget _buildDisputes(Color cardColor, bool isMobile) {
+    return Padding(
+      padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Open Disputes", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            if (_disputes.isEmpty)
+              const Text("No disputes raised.", style: TextStyle(color: Colors.grey))
+            else
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _disputes.length,
+                  itemBuilder: (context, index) {
+                    final d = _disputes[index];
+                    final status = d['status'] as String;
+                    return ListTile(
+                      leading: Icon(Icons.gavel, color: status == 'OPEN' ? Colors.orange : Colors.grey),
+                      title: Text('Order #${d['order_id'].toString().substring(0, 8)} — ${d['reason']}', style: const TextStyle(color: Colors.white)),
+                      subtitle: Text('Raised by ${d['raiser']?['name'] ?? 'customer'} • $status', style: const TextStyle(color: Colors.grey)),
+                      trailing: status == 'OPEN'
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                TextButton(onPressed: () => _resolveDisputeDialog(d['id'], 'RESOLVED'), child: const Text('Resolve')),
+                                TextButton(onPressed: () => _resolveDisputeDialog(d['id'], 'REJECTED'), child: const Text('Reject', style: TextStyle(color: Colors.red))),
+                              ],
+                            )
+                          : null,
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _resolveDisputeDialog(String id, String status) {
+    final resolutionCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(status == 'RESOLVED' ? 'Resolve dispute (issues refund)' : 'Reject dispute'),
+        content: _buildStyledTextField(resolutionCtrl, 'Resolution notes', false),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              try {
+                await _auth.resolveDispute(id, status, resolutionCtrl.text);
+                await _loadQueues();
+              } catch (e) {
+                if (mounted) _showErrorSnack(context, e);
+              }
+            },
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFraudFlags(Color cardColor, bool isMobile) {
+    return Padding(
+      padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Unresolved Fraud Flags", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            if (_fraudFlags.isEmpty)
+              const Text("No fraud flags — nothing suspicious detected.", style: TextStyle(color: Colors.grey))
+            else
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _fraudFlags.length,
+                  itemBuilder: (context, index) {
+                    final f = _fraudFlags[index];
+                    return ListTile(
+                      leading: Icon(Icons.warning, color: f['severity'] == 'HIGH' ? Colors.red : (f['severity'] == 'MEDIUM' ? Colors.orange : Colors.yellow)),
+                      title: Text(f['reason'], style: const TextStyle(color: Colors.white)),
+                      subtitle: Text('Severity: ${f['severity']}', style: const TextStyle(color: Colors.grey)),
+                      trailing: ElevatedButton(
+                        onPressed: () async {
+                          try {
+                            await _auth.resolveFraudFlag(f['id']);
+                            await _loadQueues();
+                          } catch (e) {
+                            if (mounted) _showErrorSnack(context, e);
+                          }
+                        },
+                        child: const Text('Mark Resolved'),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildZoneConfig(Color cardColor, bool isMobile) {
+    return Padding(
+      padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("City/Zone Config", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                ElevatedButton.icon(onPressed: _showAddZoneDialog, icon: const Icon(Icons.add, size: 16), label: const Text('Add Zone')),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (_zones.isEmpty)
+              const Text("No zones configured yet.", style: TextStyle(color: Colors.grey))
+            else
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _zones.length,
+                  itemBuilder: (context, index) {
+                    final z = _zones[index];
+                    return ListTile(
+                      leading: const Icon(Icons.map, color: Colors.blueAccent),
+                      title: Text('${z['zone_name']}, ${z['city']}', style: const TextStyle(color: Colors.white)),
+                      subtitle: Text('Surge: ${z['surge_multiplier']}x • Radius: ${z['delivery_radius_km']}km', style: const TextStyle(color: Colors.grey)),
+                      trailing: Switch(
+                        value: z['is_active'] ?? true,
+                        activeColor: Colors.green,
+                        onChanged: (v) async {
+                          try {
+                            await _auth.updateZone(z['id'], {'is_active': v});
+                            await _loadQueues();
+                          } catch (e) {
+                            if (mounted) _showErrorSnack(context, e);
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showAddZoneDialog() {
+    final cityCtrl = TextEditingController();
+    final zoneCtrl = TextEditingController();
+    final surgeCtrl = TextEditingController(text: '1.0');
+    final radiusCtrl = TextEditingController(text: '5.0');
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Zone'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildStyledTextField(cityCtrl, 'City', false),
+            const SizedBox(height: 8),
+            _buildStyledTextField(zoneCtrl, 'Zone name', false),
+            const SizedBox(height: 8),
+            _buildStyledTextField(surgeCtrl, 'Surge multiplier', false),
+            const SizedBox(height: 8),
+            _buildStyledTextField(radiusCtrl, 'Delivery radius (km)', false),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              if (cityCtrl.text.isEmpty || zoneCtrl.text.isEmpty) return;
+              Navigator.pop(context);
+              try {
+                await _auth.createZone(cityCtrl.text, zoneCtrl.text, surgeMultiplier: double.tryParse(surgeCtrl.text), radiusKm: double.tryParse(radiusCtrl.text));
+                await _loadQueues();
+              } catch (e) {
+                if (mounted) _showErrorSnack(context, e);
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSupportQueue(Color cardColor, bool isMobile) {
+    return Padding(
+      padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Open Support Tickets", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            if (_supportTickets.isEmpty)
+              const Text("No open tickets.", style: TextStyle(color: Colors.grey))
+            else
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _supportTickets.length,
+                  itemBuilder: (context, index) {
+                    final t = _supportTickets[index];
+                    return ListTile(
+                      leading: const Icon(Icons.support_agent, color: Colors.blueAccent),
+                      title: Text(t['subject'], style: const TextStyle(color: Colors.white)),
+                      subtitle: Text('${t['user']?['name'] ?? 'User'}: ${t['message']}', style: const TextStyle(color: Colors.grey)),
+                      isThreeLine: true,
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextButton(
+                            onPressed: () async {
+                              try {
+                                await _auth.updateSupportTicketAdmin(t['id'], 'IN_PROGRESS');
+                                await _loadQueues();
+                              } catch (e) {
+                                if (mounted) _showErrorSnack(context, e);
+                              }
+                            },
+                            child: const Text('In Progress'),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              try {
+                                await _auth.updateSupportTicketAdmin(t['id'], 'CLOSED');
+                                await _loadQueues();
+                              } catch (e) {
+                                if (mounted) _showErrorSnack(context, e);
+                              }
+                            },
+                            child: const Text('Close'),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildNavItem(IconData icon, String title, bool isSelected, Color accentColor, bool isMobile, {VoidCallback? onTap}) {
     return InkWell(
       onTap: () {
@@ -2936,6 +3741,140 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           const SizedBox(width: 16),
           Expanded(child: Text(title, style: TextStyle(color: isSelected ? accentColor : Colors.white70, fontSize: 14, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal))),
         ]),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// MESSAGE CENTER — real-time chat scoped to one order. Loads history via
+// REST (GET /chat/:orderId/history), then joins a Socket.IO room and both
+// sends and receives live messages through the same ChatGateway used by
+// every role (customer/vendor/rider all use this same screen).
+// ============================================================================
+class ChatScreen extends StatefulWidget {
+  final String orderId;
+  final String senderId;
+  final String senderRole; // "CUSTOMER" | "VENDOR" | "RIDER"
+  const ChatScreen({super.key, required this.orderId, required this.senderId, required this.senderRole});
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  final AuthService _auth = AuthService();
+  final TextEditingController _messageCtrl = TextEditingController();
+  final ScrollController _scrollCtrl = ScrollController();
+  List<dynamic> _messages = [];
+  bool _isLoading = true;
+  IO.Socket? _socket;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+    _connectSocket();
+  }
+
+  Future<void> _loadHistory() async {
+    try {
+      _messages = await _auth.getChatHistory(widget.orderId);
+    } catch (e) {}
+    setState(() => _isLoading = false);
+    _scrollToBottom();
+  }
+
+  void _connectSocket() {
+    _socket = IO.io(_auth.baseUrl, IO.OptionBuilder().setTransports(['websocket']).build());
+    _socket!.onConnect((_) {
+      _socket!.emit('join_order_chat', {'orderId': widget.orderId});
+    });
+    _socket!.on('new_message', (data) {
+      setState(() => _messages.add(data));
+      _scrollToBottom();
+    });
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollCtrl.hasClients) _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+    });
+  }
+
+  void _send() {
+    if (_messageCtrl.text.trim().isEmpty) return;
+    _socket?.emit('send_message', {
+      'orderId': widget.orderId,
+      'senderId': widget.senderId,
+      'senderRole': widget.senderRole,
+      'message': _messageCtrl.text.trim(),
+    });
+    _messageCtrl.clear();
+  }
+
+  @override
+  void dispose() {
+    _socket?.disconnect();
+    _socket?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Order #${widget.orderId.substring(0, 8)}')),
+      body: Column(
+        children: [
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _messages.isEmpty
+                    ? const Center(child: Text('No messages yet — say hello!'))
+                    : ListView.builder(
+                        controller: _scrollCtrl,
+                        padding: const EdgeInsets.all(16),
+                        itemCount: _messages.length,
+                        itemBuilder: (context, index) {
+                          final m = _messages[index];
+                          final isMe = m['sender_id'] == widget.senderId;
+                          return Align(
+                            alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                              decoration: BoxDecoration(color: isMe ? Colors.green[700] : Colors.grey[300], borderRadius: BorderRadius.circular(16)),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (!isMe) Text(m['sender_role'] ?? '', style: TextStyle(fontSize: 10, color: Colors.grey[700], fontWeight: FontWeight.bold)),
+                                  Text(m['message'] ?? '', style: TextStyle(color: isMe ? Colors.white : Colors.black)),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _messageCtrl,
+                      decoration: InputDecoration(hintText: 'Type a message...', filled: true, fillColor: Colors.grey[200], border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(horizontal: 16)),
+                      onSubmitted: (_) => _send(),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  CircleAvatar(backgroundColor: Colors.green[700], child: IconButton(icon: const Icon(Icons.send, color: Colors.white, size: 18), onPressed: _send)),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

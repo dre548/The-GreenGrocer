@@ -54,4 +54,10 @@ export class OrdersController {
   async rateOrder(@Param('id') id: string, @Body() body: { target: 'VENDOR' | 'RIDER', score: number, comment?: string }) {
     return this.ordersService.rateOrder(id, body.target, body.score, body.comment);
   }
+
+  @UseGuards(AuthGuard)
+  @Post(':id/dispute')
+  async raiseDispute(@Param('id') id: string, @Body() body: { reason: string }, @Request() req: any) {
+    return this.ordersService.raiseDispute(id, req.user.sub, body.reason);
+  }
 } // <--- The Controller class safely closes here!

@@ -189,4 +189,13 @@ export class OrdersService {
       data: { order_id: orderId, target, target_id: targetId, score, comment },
     });
   }
+
+  // --- FUNCTION 9: RAISE DISPUTE (customer -> feeds Admin's Disputes tab) ---
+  async raiseDispute(orderId: string, raisedBy: string, reason: string) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new Error('Order not found');
+    return this.prisma.dispute.create({
+      data: { order_id: orderId, raised_by: raisedBy, reason },
+    });
+  }
 }

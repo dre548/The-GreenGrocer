@@ -53,16 +53,42 @@ enum RatingTarget {
   RIDER
 }
 
-model User {
-  id         String   @id @default(uuid())
-  phone      String   @unique
-  name       String
-  role       UserRole @default(CUSTOMER)
-  created_at DateTime @default(now())
+enum DisputeStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  REJECTED
+}
 
-  vendorProfile Vendor?
-  riderProfile  Rider?
-  orders        Order[]
+enum FraudSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  CLOSED
+}
+
+model User {
+  id                  String   @id @default(uuid())
+  phone               String   @unique
+  name                String
+  role                UserRole @default(CUSTOMER)
+  cash_wallet_balance Float    @default(0)
+  created_at          DateTime @default(now())
+
+  vendorProfile   Vendor?
+  riderProfile    Rider?
+  orders          Order[]
+  disputesRaised  Dispute[]
+  supportTickets  SupportTicket[]
+  favorites       FavoriteVendor[]
+  chatMessages    ChatMessage[]
+  familyAsOwner   FamilyMember[] @relation("FamilyOwner")
+  familyAsMember  FamilyMember[] @relation("FamilyMember")
 }
 
 model Vendor {
@@ -127,6 +153,8 @@ model Order {
   rider          Rider?      @relation(fields: [rider_id], references: [id])
   transactions   Transaction[]
   ratings        Rating[]
+  disputes       Dispute[]
+  chatMessages   ChatMessage[]
 }
 
 // Ledger of money movement: order charges, vendor/rider payouts, refunds,
@@ -156,4 +184,103 @@ model Rating {
   created_at DateTime     @default(now())
 
   order      Order        @relation(fields: [order_id], references: [id])
+}
+
+// --- Admin: Disputes/Refunds tab ---
+model Dispute {
+  id         String        @id @default(uuid())
+  order_id   String
+  raised_by  String        // user.id of whoever filed it
+  reason     String
+  status     DisputeStatus @default(OPEN)
+  resolution String?
+  created_at DateTime      @default(now())
+
+  order      Order         @relation(fields: [order_id], references: [id])
+  raiser     User          @relation(fields: [raised_by], references: [id])
+}
+
+// --- Admin: Fraud Flags tab ---
+model FraudFlag {
+  id         String        @id @default(uuid())
+  order_id   String?
+  user_id    String?
+  reason     String
+  severity   FraudSeverity @default(LOW)
+  resolved   Boolean       @default(false)
+  created_at DateTime      @default(now())
+}
+
+// --- Admin: City/Zone Config tab ---
+model ZoneConfig {
+  id                 String   @id @default(uuid())
+  city               String
+  zone_name          String
+  surge_multiplier   Float    @default(1.0)
+  delivery_radius_km Float    @default(5.0)
+  is_active          Boolean  @default(true)
+  created_at         DateTime @default(now())
+}
+
+// --- Admin: Support Queue tab ---
+model SupportTicket {
+  id         String              @id @default(uuid())
+  user_id    String
+  subject    String
+  message    String
+  status     SupportTicketStatus @default(OPEN)
+  created_at DateTime            @default(now())
+
+  user       User                @relation(fields: [user_id], references: [id])
+}
+
+// --- Customer: Favourites ---
+model FavoriteVendor {
+  id         String   @id @default(uuid())
+  user_id    String
+  vendor_id  String
+  created_at DateTime @default(now())
+
+  user       User     @relation(fields: [user_id], references: [id])
+
+  @@unique([user_id, vendor_id])
+}
+
+// --- Customer: Promotions/vouchers ---
+model Promotion {
+  id           String    @id @default(uuid())
+  code         String    @unique
+  description  String
+  discount_pct Float?
+  flat_amount  Float?
+  active       Boolean   @default(true)
+  expires_at   DateTime?
+  created_at   DateTime  @default(now())
+}
+
+// --- Customer: Family sharing ---
+model FamilyMember {
+  id             String   @id @default(uuid())
+  owner_id       String   // the paying/primary account
+  member_id      String   // the invited user
+  spending_limit Float?
+  created_at     DateTime @default(now())
+
+  owner          User     @relation("FamilyOwner", fields: [owner_id], references: [id])
+  member         User     @relation("FamilyMember", fields: [member_id], references: [id])
+
+  @@unique([owner_id, member_id])
+}
+
+// --- Message Center: order-scoped chat between customer/vendor/rider ---
+model ChatMessage {
+  id          String   @id @default(uuid())
+  order_id    String
+  sender_id   String
+  sender_role String   // "CUSTOMER" | "VENDOR" | "RIDER"
+  message     String
+  created_at  DateTime @default(now())
+
+  order       Order    @relation(fields: [order_id], references: [id])
+  sender      User     @relation(fields: [sender_id], references: [id])
 }

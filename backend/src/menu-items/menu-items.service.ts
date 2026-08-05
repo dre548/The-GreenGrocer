@@ -47,6 +47,10 @@ export class MenuItemsService {
     return this.prisma.product.update({ where: { id }, data: { in_stock: inStock } });
   }
 
+  async setImage(id: string, imageUrl: string) {
+    return this.prisma.product.update({ where: { id }, data: { image_url: imageUrl } });
+  }
+
   async remove(id: string) {
     return this.prisma.product.delete({ where: { id } });
   }

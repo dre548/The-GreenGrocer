@@ -63,4 +63,102 @@ export class AdminService {
       data: { status: 'COMPLETED' },
     });
   }
+
+  // --- DISPUTES/REFUNDS ---
+  async getDisputes() {
+    return this.prisma.dispute.findMany({
+      orderBy: { created_at: 'desc' },
+      include: { order: true, raiser: true },
+    });
+  }
+
+  async resolveDispute(id: string, status: 'RESOLVED' | 'REJECTED', resolution: string) {
+    const dispute = await this.prisma.dispute.findUnique({ where: { id } });
+    if (!dispute) throw new NotFoundException('Dispute not found');
+
+    if (status === 'RESOLVED') {
+      // Resolving a dispute triggers a real refund transaction, same as a
+      // vendor-side order cancellation.
+      const order = await this.prisma.order.findUnique({ where: { id: dispute.order_id } });
+      if (order) {
+        await this.prisma.transaction.create({
+          data: {
+            order_id: order.id,
+            type: 'REFUND',
+            party: 'PLATFORM',
+            party_id: order.vendor_id,
+            amount: order.total,
+            method: order.payment_method,
+            status: 'PENDING',
+          },
+        });
+      }
+    }
+
+    return this.prisma.dispute.update({
+      where: { id },
+      data: { status, resolution },
+    });
+  }
+
+  // --- FRAUD FLAGS ---
+  async getFraudFlags() {
+    return this.prisma.fraudFlag.findMany({
+      where: { resolved: false },
+      orderBy: { created_at: 'desc' },
+    });
+  }
+
+  async resolveFraudFlag(id: string) {
+    return this.prisma.fraudFlag.update({ where: { id }, data: { resolved: true } });
+  }
+
+  // --- CITY/ZONE CONFIG ---
+  async getZones() {
+    return this.prisma.zoneConfig.findMany({ orderBy: { city: 'asc' } });
+  }
+
+  async createZone(data: { city: string; zone_name: string; surge_multiplier?: number; delivery_radius_km?: number }) {
+    return this.prisma.zoneConfig.create({ data });
+  }
+
+  async updateZone(id: string, data: any) {
+    return this.prisma.zoneConfig.update({ where: { id }, data });
+  }
+
+  // --- SUPPORT QUEUE ---
+  async getSupportTickets() {
+    return this.prisma.supportTicket.findMany({
+      where: { status: { not: 'CLOSED' } },
+      orderBy: { created_at: 'asc' },
+      include: { user: true },
+    });
+  }
+
+  async updateSupportTicket(id: string, status: 'IN_PROGRESS' | 'CLOSED') {
+    return this.prisma.supportTicket.update({ where: { id }, data: { status } });
+  }
+
+  // --- REVENUE / OVERVIEW KPIs ---
+  // Real aggregation from Order + Transaction — no invented numbers.
+  async getRevenueSummary() {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const ordersThisMonth = await this.prisma.order.findMany({
+      where: { created_at: { gte: startOfMonth }, status: { not: 'CANCELLED' } },
+    });
+
+    const revenueMtd = ordersThisMonth.reduce((sum, o) => sum + o.total, 0);
+    const ordersCount = ordersThisMonth.length;
+    const avgOrderValue = ordersCount > 0 ? revenueMtd / ordersCount : 0;
+    const activeCustomerIds = new Set(ordersThisMonth.map((o) => o.customer_id));
+
+    return {
+      revenue_mtd: revenueMtd,
+      orders_mtd: ordersCount,
+      avg_order_value: avgOrderValue,
+      active_customers: activeCustomerIds.size,
+    };
+  }
 }
