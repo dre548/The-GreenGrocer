@@ -60,14 +60,14 @@ class AuthService {
   // AUTH & OTP
   // ===========================================================================
 
-  Future<void> requestOtp(String phone) async {
+  Future<void> requestOtp(String phone, {String channel = 'sms', String? email}) async {
     final response = await http.post(
       Uri.parse('$baseUrl/auth/request-otp'),
       headers: {
         'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': 'true',
       },
-      body: jsonEncode({'phone': phone}),
+      body: jsonEncode({'phone': phone, 'channel': channel, if (email != null) 'email': email}),
     );
     _decodeOrThrow(response);
   }
@@ -444,6 +444,21 @@ class AuthService {
 
   Future<Map<String, dynamic>> getRevenueSummary() async {
     return Map<String, dynamic>.from(await _get('/admin/revenue-summary'));
+  }
+
+  // ===========================================================================
+  // PAYMENT SETTINGS (admin-configurable M-Pesa fallback note at checkout)
+  // ===========================================================================
+
+  // Deliberately unauthenticated GET — the customer checkout screen needs
+  // this without an admin token.
+  Future<Map<String, dynamic>> getPaymentSettings() async {
+    final response = await http.get(Uri.parse('$baseUrl/admin/payment-settings'), headers: {'ngrok-skip-browser-warning': 'true'});
+    return Map<String, dynamic>.from(_decodeOrThrow(response));
+  }
+
+  Future<void> updatePaymentSettings(Map<String, dynamic> data) async {
+    await _patch('/admin/payment-settings', data);
   }
 
   // ===========================================================================

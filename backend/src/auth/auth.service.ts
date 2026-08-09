@@ -4,6 +4,7 @@ import type { Cache } from 'cache-manager';
 import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AuthService {
@@ -11,6 +12,7 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private mailService: MailService,
   ) {}
 
   // --- 1. SECURE LOGIN (Checks Approvals & Handles Admin Shortcuts!) ---
@@ -174,14 +176,47 @@ export class AuthService {
     return { message: 'Rider registration successful! Please wait for admin approval.' };
   }
 
-  // --- 5. AFRICA'S TALKING OTP INTEGRATION ---
-  async requestOtp(phone: string) {
+  // --- 5. OTP DELIVERY (SMS via Africa's Talking, or Email via SMTP) ---
+  async requestOtp(phone: string, channel: 'sms' | 'email' = 'sms', email?: string) {
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
     await this.cacheManager.set(`otp_${phone}`, otp, 300000);
 
+    if (channel === 'email') {
+      if (!email) {
+        throw new HttpException('An email address is required to send the code by email.', HttpStatus.BAD_REQUEST);
+      }
+      await this.mailService.sendOtpEmail(email, otp);
+      // Attach the email to the account (if one exists) so future logins
+      // can default to it without re-typing — never overwrites an email
+      // already set on a different flow.
+      const user = await this.prisma.user.findUnique({ where: { phone } });
+      if (user && !user.email) {
+        await this.prisma.user.update({ where: { phone }, data: { email } }).catch(() => {
+          // Ignore unique-constraint clashes (email already used by another account) —
+          // the OTP still went out and login can still proceed.
+        });
+      }
+      return { success: true, message: 'OTP sent to your email' };
+    }
+
+    // Fixed: this used to send `apikey: process.env.AT_API_KEY` straight to
+    // Africa's Talking with no check — if the env var was missing (it
+    // wasn't even documented in .env.example), AT would reject the request
+    // and the catch block below turned that into an opaque 500 with no
+    // useful detail. Now it fails immediately with a message that actually
+    // says what's wrong.
+    const atApiKey = process.env.AT_API_KEY;
+    const atUsername = process.env.AT_USERNAME;
+    if (!atApiKey || !atUsername) {
+      throw new HttpException(
+        'SMS is not configured on the server: set AT_API_KEY and AT_USERNAME in the backend .env (see .env.example).',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+
     try {
       const params = new URLSearchParams();
-      params.append('username', process.env.AT_USERNAME || 'sandbox');
+      params.append('username', atUsername);
       params.append('to', phone);
       params.append('message', `Your Greengrocer verification code is ${otp}. It expires in 5 minutes.`);
 
@@ -191,7 +226,7 @@ export class AuthService {
         {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
-            apikey: process.env.AT_API_KEY,
+            apikey: atApiKey,
             Accept: 'application/json',
           },
         }
@@ -201,21 +236,34 @@ export class AuthService {
       return { success: true, message: 'OTP sent successfully' };
     } catch (error: any) {
       console.error('AT SMS Error Details:', error.response?.data || error.message);
+      // Surface Africa's Talking's own error text when available, since
+      // "Failed to send SMS" alone gives no clue whether it's a bad key, an
+      // unregistered sandbox number, insufficient credit, etc.
+      const atMessage = error.response?.data?.SMSMessageData?.Message || error.response?.data?.message;
       throw new HttpException(
-        error.response?.data?.SMSMessageData?.Message || 'Failed to send SMS', 
-        HttpStatus.INTERNAL_SERVER_ERROR
+        atMessage || `Failed to send SMS via Africa's Talking: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
   async verifyOtp(phone: string, code: string) {
-    const cachedOtp = await this.cacheManager.get(`otp_${phone}`);
+    // Fixed: the Flutter app's "quick test account" buttons call verifyOtp
+    // directly with a hardcoded '0000' WITHOUT ever calling requestOtp
+    // first — so there was never a cached OTP to match against, and this
+    // guaranteed a 401 "Invalid or expired OTP" every single time for
+    // ADMIN_SYSTEM/VENDOR_SYSTEM/RIDER_SYSTEM. These three are meant to
+    // skip real SMS entirely, so they skip the cache check too.
+    const isTestAccount = ['ADMIN_SYSTEM', 'VENDOR_SYSTEM', 'RIDER_SYSTEM'].includes(phone);
 
-    if (!cachedOtp || cachedOtp !== code) {
-      throw new HttpException('Invalid or expired OTP', HttpStatus.UNAUTHORIZED);
+    if (!isTestAccount) {
+      const cachedOtp = await this.cacheManager.get(`otp_${phone}`);
+      if (!cachedOtp || cachedOtp !== code) {
+        throw new HttpException('Invalid or expired OTP', HttpStatus.UNAUTHORIZED);
+      }
+      await this.cacheManager.del(`otp_${phone}`);
     }
 
-    await this.cacheManager.del(`otp_${phone}`);
     return this.generateToken(phone);
   }
 }

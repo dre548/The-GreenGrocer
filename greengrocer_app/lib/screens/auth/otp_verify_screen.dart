@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
+import '../../main.dart';
 
 class OtpVerifyScreen extends StatefulWidget {
   final String phone;
-  const OtpVerifyScreen({super.key, required this.phone});
+  final String deliveredTo;
+  const OtpVerifyScreen({super.key, required this.phone, required this.deliveredTo});
 
   @override
   State<OtpVerifyScreen> createState() => _OtpVerifyScreenState();
@@ -24,14 +27,43 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
 
     setState(() => _isLoading = true);
     try {
-      await _authService.verifyOtp(widget.phone, _codeController.text);
-      Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
+      final data = await _authService.verifyOtp(widget.phone, _codeController.text);
+      if (!mounted) return;
+
+      // Fixed: this used to push a named route ('/home') that was never
+      // registered anywhere in MaterialApp, which crashed on every
+      // successful verification. Now it routes by role — same pattern
+      // LoginScreen uses — and loads RoleProvider's session data first so
+      // the destination dashboard actually has vendor_id/rider_id/wallet
+      // ready immediately.
+      await context.read<RoleProvider>().loadSession();
+      if (!mounted) return;
+
+      final roleProvider = context.read<RoleProvider>();
+      final role = data['role'];
+
+      Widget destination;
+      if (role == 'VENDOR' && roleProvider.vendorId != null) {
+        destination = VendorDashboardScreen(vendorId: roleProvider.vendorId!);
+      } else if (role == 'RIDER' && roleProvider.riderId != null) {
+        destination = RiderDashboardScreen(riderId: roleProvider.riderId!);
+      } else if (role == 'ADMIN') {
+        destination = const AdminDashboardScreen();
+      } else {
+        destination = MainNavigation(userPhone: widget.phone);
+      }
+
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => destination),
+        (route) => false,
+      );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Verification failed: $e')),
       );
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -44,7 +76,7 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text('Enter the code sent to ${widget.phone}', style: const TextStyle(fontSize: 16)),
+            Text('Enter the code sent to ${widget.deliveredTo}', style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 20),
             TextField(
               controller: _codeController,
@@ -61,9 +93,9 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
               height: 50,
               child: ElevatedButton(
                 onPressed: _isLoading ? null : _verifyOtp,
-                child: _isLoading 
-                  ? const CircularProgressIndicator(color: Colors.white) 
-                  : const Text('Verify & Login'),
+                child: _isLoading
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Text('Verify & Login'),
               ),
             ),
           ],

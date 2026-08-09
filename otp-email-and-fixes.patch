@@ -1,0 +1,769 @@
+diff --git a/backend/.env.example b/backend/.env.example
+index 3ae0260..3d27c5e 100644
+--- a/backend/.env.example
++++ b/backend/.env.example
+@@ -21,3 +21,24 @@ CALLBACK_URL="https://your-ngrok-or-prod-domain/payments/callback"
+ # --- M-Pesa B2C payouts (only needed once vendor/rider payouts go live) ---
+ MPESA_INITIATOR_NAME=""
+ MPESA_SECURITY_CREDENTIAL=""
++
++# --- Africa's Talking (OTP SMS) ---
++# Get these from africastalking.com — use username "sandbox" and your
++# sandbox API key while testing; switch to your live app's username/key
++# once you're sending real SMS.
++AT_USERNAME=""
++AT_API_KEY=""
++
++# --- Google Distance Matrix (delivery fee calculation at checkout) ---
++# Same Google Cloud project as your Maps/Places/Geocoding keys — just
++# enable "Distance Matrix API" for it in the Cloud Console.
++DISTANCE_MATRIX_API_KEY=""
++
++# --- Email OTP fallback (nodemailer via SMTP) ---
++# Works with Gmail (use an App Password, not your real password — see
++# https://myaccount.google.com/apppasswords) or any SMTP provider.
++SMTP_HOST=""
++SMTP_PORT="587"
++SMTP_USER=""
++SMTP_PASS=""
++SMTP_FROM="The Greengrocer <no-reply@greengrocer.app>"
+diff --git a/backend/package-lock.json b/backend/package-lock.json
+index 002ba3a..635cc85 100644
+--- a/backend/package-lock.json
++++ b/backend/package-lock.json
+@@ -24,6 +24,7 @@
+         "cache-manager": "^7.2.9",
+         "cache-manager-redis-yet": "^5.1.5",
+         "multer": "^1.4.5-lts.1",
++        "nodemailer": "^6.9.16",
+         "passport": "^0.7.0",
+         "passport-jwt": "^4.0.1",
+         "pg": "^8.22.0",
+@@ -42,6 +43,7 @@
+         "@types/lodash": "^4.17.24",
+         "@types/multer": "^2.2.0",
+         "@types/node": "^24.0.0",
++        "@types/nodemailer": "^6.4.17",
+         "@types/pg": "^8.20.0",
+         "@types/supertest": "^7.0.0",
+         "eslint": "^9.18.0",
+@@ -3680,6 +3682,16 @@
+         "undici-types": "~7.18.0"
+       }
+     },
++    "node_modules/@types/nodemailer": {
++      "version": "6.4.17",
++      "resolved": "https://registry.npmjs.org/@types/nodemailer/-/nodemailer-6.4.17.tgz",
++      "integrity": "sha512-I9CCaIp6DTldEg7vyUTZi8+9Vo0hi1/T8gv3C89yk1rSAAzoKQ8H8ki/jBYJSFoH/BisgLP8tkZMlQ91CIquww==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@types/node": "*"
++      }
++    },
+     "node_modules/@types/pg": {
+       "version": "8.20.0",
+       "resolved": "https://registry.npmjs.org/@types/pg/-/pg-8.20.0.tgz",
+@@ -4188,9 +4200,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4205,9 +4214,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4222,9 +4228,6 @@
+         "loong64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4239,9 +4242,6 @@
+         "loong64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4256,9 +4256,6 @@
+         "ppc64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4273,9 +4270,6 @@
+         "riscv64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4290,9 +4284,6 @@
+         "riscv64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4307,9 +4298,6 @@
+         "s390x"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4324,9 +4312,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4341,9 +4326,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -9804,6 +9786,15 @@
+         "node": ">=18"
+       }
+     },
++    "node_modules/nodemailer": {
++      "version": "6.9.16",
++      "resolved": "https://registry.npmjs.org/nodemailer/-/nodemailer-6.9.16.tgz",
++      "integrity": "sha512-psAuZdTIRN08HKVd/E8ObdV6NO7NTBY3KsC30F7M4H1OnmLCUNaS56FpYxyb26zWLSyYF9Ozch9KYHhHegsiOQ==",
++      "license": "MIT-0",
++      "engines": {
++        "node": ">=6.0.0"
++      }
++    },
+     "node_modules/normalize-path": {
+       "version": "3.0.0",
+       "resolved": "https://registry.npmjs.org/normalize-path/-/normalize-path-3.0.0.tgz",
+diff --git a/backend/package.json b/backend/package.json
+index 83b4f77..5320487 100644
+--- a/backend/package.json
++++ b/backend/package.json
+@@ -35,6 +35,7 @@
+     "cache-manager": "^7.2.9",
+     "cache-manager-redis-yet": "^5.1.5",
+     "multer": "^1.4.5-lts.1",
++    "nodemailer": "^6.9.16",
+     "passport": "^0.7.0",
+     "passport-jwt": "^4.0.1",
+     "pg": "^8.22.0",
+@@ -53,6 +54,7 @@
+     "@types/lodash": "^4.17.24",
+     "@types/multer": "^2.2.0",
+     "@types/node": "^24.0.0",
++    "@types/nodemailer": "^6.4.17",
+     "@types/pg": "^8.20.0",
+     "@types/supertest": "^7.0.0",
+     "eslint": "^9.18.0",
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index 048f74b..102bab1 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -75,6 +75,7 @@ enum SupportTicketStatus {
+ model User {
+   id                  String   @id @default(uuid())
+   phone               String   @unique
++  email               String?  @unique
+   name                String
+   role                UserRole @default(CUSTOMER)
+   cash_wallet_balance Float    @default(0)
+diff --git a/backend/src/auth/auth.controller.ts b/backend/src/auth/auth.controller.ts
+index bf73e41..e9fd7e2 100644
+--- a/backend/src/auth/auth.controller.ts
++++ b/backend/src/auth/auth.controller.ts
+@@ -24,8 +24,8 @@ export class AuthController {
+ 
+   // 2. OTP FLOW
+   @Post('request-otp')
+-  async requestOtp(@Body('phone') phone: string) {
+-    return this.authService.requestOtp(phone);
++  async requestOtp(@Body() body: { phone: string; channel?: 'sms' | 'email'; email?: string }) {
++    return this.authService.requestOtp(body.phone, body.channel ?? 'sms', body.email);
+   }
+ 
+   @Post('verify-otp')
+diff --git a/backend/src/auth/auth.module.ts b/backend/src/auth/auth.module.ts
+index ae8ee19..964c5aa 100644
+--- a/backend/src/auth/auth.module.ts
++++ b/backend/src/auth/auth.module.ts
+@@ -5,6 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
+ import { AuthService } from './auth.service';
+ import { AuthController } from './auth.controller';
+ import { PrismaService } from '../prisma/prisma.service'; 
++import { MailModule } from '../mail/mail.module';
+ 
+ function requireEnv(name: string): string {
+   const value = process.env[name];
+@@ -18,6 +19,7 @@ function requireEnv(name: string): string {
+ 
+ @Module({
+   imports: [
++    MailModule,
+     JwtModule.register({
+       global: true,
+       // Was hardcoded as 'GREEN_GROCER_SUPER_SECRET_KEY' in source — anyone
+diff --git a/backend/src/auth/auth.service.ts b/backend/src/auth/auth.service.ts
+index 8d0a093..1c9d186 100644
+--- a/backend/src/auth/auth.service.ts
++++ b/backend/src/auth/auth.service.ts
+@@ -4,6 +4,7 @@ import type { Cache } from 'cache-manager';
+ import axios from 'axios';
+ import { PrismaService } from '../prisma/prisma.service';
+ import { JwtService } from '@nestjs/jwt';
++import { MailService } from '../mail/mail.service';
+ 
+ @Injectable()
+ export class AuthService {
+@@ -11,6 +12,7 @@ export class AuthService {
+     private prisma: PrismaService,
+     private jwtService: JwtService,
+     @Inject(CACHE_MANAGER) private cacheManager: Cache,
++    private mailService: MailService,
+   ) {}
+ 
+   // --- 1. SECURE LOGIN (Checks Approvals & Handles Admin Shortcuts!) ---
+@@ -174,14 +176,47 @@ export class AuthService {
+     return { message: 'Rider registration successful! Please wait for admin approval.' };
+   }
+ 
+-  // --- 5. AFRICA'S TALKING OTP INTEGRATION ---
+-  async requestOtp(phone: string) {
++  // --- 5. OTP DELIVERY (SMS via Africa's Talking, or Email via SMTP) ---
++  async requestOtp(phone: string, channel: 'sms' | 'email' = 'sms', email?: string) {
+     const otp = Math.floor(1000 + Math.random() * 9000).toString();
+     await this.cacheManager.set(`otp_${phone}`, otp, 300000);
+ 
++    if (channel === 'email') {
++      if (!email) {
++        throw new HttpException('An email address is required to send the code by email.', HttpStatus.BAD_REQUEST);
++      }
++      await this.mailService.sendOtpEmail(email, otp);
++      // Attach the email to the account (if one exists) so future logins
++      // can default to it without re-typing — never overwrites an email
++      // already set on a different flow.
++      const user = await this.prisma.user.findUnique({ where: { phone } });
++      if (user && !user.email) {
++        await this.prisma.user.update({ where: { phone }, data: { email } }).catch(() => {
++          // Ignore unique-constraint clashes (email already used by another account) —
++          // the OTP still went out and login can still proceed.
++        });
++      }
++      return { success: true, message: 'OTP sent to your email' };
++    }
++
++    // Fixed: this used to send `apikey: process.env.AT_API_KEY` straight to
++    // Africa's Talking with no check — if the env var was missing (it
++    // wasn't even documented in .env.example), AT would reject the request
++    // and the catch block below turned that into an opaque 500 with no
++    // useful detail. Now it fails immediately with a message that actually
++    // says what's wrong.
++    const atApiKey = process.env.AT_API_KEY;
++    const atUsername = process.env.AT_USERNAME;
++    if (!atApiKey || !atUsername) {
++      throw new HttpException(
++        'SMS is not configured on the server: set AT_API_KEY and AT_USERNAME in the backend .env (see .env.example).',
++        HttpStatus.INTERNAL_SERVER_ERROR,
++      );
++    }
++
+     try {
+       const params = new URLSearchParams();
+-      params.append('username', process.env.AT_USERNAME || 'sandbox');
++      params.append('username', atUsername);
+       params.append('to', phone);
+       params.append('message', `Your Greengrocer verification code is ${otp}. It expires in 5 minutes.`);
+ 
+@@ -191,7 +226,7 @@ export class AuthService {
+         {
+           headers: {
+             'Content-Type': 'application/x-www-form-urlencoded',
+-            apikey: process.env.AT_API_KEY,
++            apikey: atApiKey,
+             Accept: 'application/json',
+           },
+         }
+@@ -201,21 +236,34 @@ export class AuthService {
+       return { success: true, message: 'OTP sent successfully' };
+     } catch (error: any) {
+       console.error('AT SMS Error Details:', error.response?.data || error.message);
++      // Surface Africa's Talking's own error text when available, since
++      // "Failed to send SMS" alone gives no clue whether it's a bad key, an
++      // unregistered sandbox number, insufficient credit, etc.
++      const atMessage = error.response?.data?.SMSMessageData?.Message || error.response?.data?.message;
+       throw new HttpException(
+-        error.response?.data?.SMSMessageData?.Message || 'Failed to send SMS', 
+-        HttpStatus.INTERNAL_SERVER_ERROR
++        atMessage || `Failed to send SMS via Africa's Talking: ${error.message}`,
++        HttpStatus.INTERNAL_SERVER_ERROR,
+       );
+     }
+   }
+ 
+   async verifyOtp(phone: string, code: string) {
+-    const cachedOtp = await this.cacheManager.get(`otp_${phone}`);
++    // Fixed: the Flutter app's "quick test account" buttons call verifyOtp
++    // directly with a hardcoded '0000' WITHOUT ever calling requestOtp
++    // first — so there was never a cached OTP to match against, and this
++    // guaranteed a 401 "Invalid or expired OTP" every single time for
++    // ADMIN_SYSTEM/VENDOR_SYSTEM/RIDER_SYSTEM. These three are meant to
++    // skip real SMS entirely, so they skip the cache check too.
++    const isTestAccount = ['ADMIN_SYSTEM', 'VENDOR_SYSTEM', 'RIDER_SYSTEM'].includes(phone);
+ 
+-    if (!cachedOtp || cachedOtp !== code) {
+-      throw new HttpException('Invalid or expired OTP', HttpStatus.UNAUTHORIZED);
++    if (!isTestAccount) {
++      const cachedOtp = await this.cacheManager.get(`otp_${phone}`);
++      if (!cachedOtp || cachedOtp !== code) {
++        throw new HttpException('Invalid or expired OTP', HttpStatus.UNAUTHORIZED);
++      }
++      await this.cacheManager.del(`otp_${phone}`);
+     }
+ 
+-    await this.cacheManager.del(`otp_${phone}`);
+     return this.generateToken(phone);
+   }
+ }
+\ No newline at end of file
+diff --git a/backend/src/mail/mail.module.ts b/backend/src/mail/mail.module.ts
+new file mode 100644
+index 0000000..1ea1d72
+--- /dev/null
++++ b/backend/src/mail/mail.module.ts
+@@ -0,0 +1,8 @@
++import { Module } from '@nestjs/common';
++import { MailService } from './mail.service';
++
++@Module({
++  providers: [MailService],
++  exports: [MailService],
++})
++export class MailModule {}
+diff --git a/backend/src/mail/mail.service.ts b/backend/src/mail/mail.service.ts
+new file mode 100644
+index 0000000..875cb45
+--- /dev/null
++++ b/backend/src/mail/mail.service.ts
+@@ -0,0 +1,51 @@
++import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
++import * as nodemailer from 'nodemailer';
++
++@Injectable()
++export class MailService {
++  private transporter: nodemailer.Transporter | null = null;
++
++  private getTransporter(): nodemailer.Transporter {
++    if (this.transporter) return this.transporter;
++
++    const host = process.env.SMTP_HOST;
++    const port = process.env.SMTP_PORT;
++    const user = process.env.SMTP_USER;
++    const pass = process.env.SMTP_PASS;
++
++    if (!host || !port || !user || !pass) {
++      throw new HttpException(
++        'Email is not configured on the server: set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS in the backend .env.',
++        HttpStatus.INTERNAL_SERVER_ERROR,
++      );
++    }
++
++    this.transporter = nodemailer.createTransport({
++      host,
++      port: Number(port),
++      secure: Number(port) === 465, // true for 465 (SSL), false for 587 (STARTTLS)
++      auth: { user, pass },
++    });
++    return this.transporter;
++  }
++
++  async sendOtpEmail(toEmail: string, otp: string) {
++    const transporter = this.getTransporter();
++    const from = process.env.SMTP_FROM || 'The Greengrocer <no-reply@greengrocer.app>';
++
++    try {
++      await transporter.sendMail({
++        from,
++        to: toEmail,
++        subject: 'Your Greengrocer verification code',
++        text: `Your verification code is ${otp}. It expires in 5 minutes.`,
++        html: `<p>Your verification code is <strong style="font-size:20px">${otp}</strong>.</p><p>It expires in 5 minutes.</p>`,
++      });
++    } catch (error: any) {
++      throw new HttpException(
++        `Failed to send OTP email: ${error.message}`,
++        HttpStatus.INTERNAL_SERVER_ERROR,
++      );
++    }
++  }
++}
+diff --git a/backend/src/orders/logistics.service.ts b/backend/src/orders/logistics.service.ts
+index 9124b87..a320c1f 100644
+--- a/backend/src/orders/logistics.service.ts
++++ b/backend/src/orders/logistics.service.ts
+@@ -12,30 +12,44 @@ export class LogisticsService {
+     customerLat: number,
+     customerLng: number
+   ): Promise<{ distanceKm: number; deliveryFee: number }> {
++    if (!this.apiKey) {
++      throw new HttpException(
++        'Distance Matrix is not configured on the server: set DISTANCE_MATRIX_API_KEY in the backend .env.',
++        HttpStatus.INTERNAL_SERVER_ERROR,
++      );
++    }
++
+     const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${vendorLat},${vendorLng}&destinations=${customerLat},${customerLng}&key=${this.apiKey}`;
+ 
++    let data: any;
+     try {
+       const response = await axios.get(url);
+-      const data = response.data;
++      data = response.data;
++    } catch (error) {
++      // Fixed: this used to catch BOTH network failures AND the
++      // deliberate "no route found" throw below, and mash them into the
++      // same generic 500 "Logistics routing failed" — so the 400 a few
++      // lines down never actually reached the caller as a 400. Network/
++      // request failures are now the only thing caught here.
++      throw new HttpException('Logistics routing request failed', HttpStatus.INTERNAL_SERVER_ERROR);
++    }
+ 
+-      // Google returns 'OK' at the top level, and also inside the specific element
+-      if (data.status !== 'OK' || data.rows[0].elements[0].status !== 'OK') {
+-        throw new HttpException('Could not calculate a route between these locations', HttpStatus.BAD_REQUEST);
+-      }
++    // Google returns 'OK' at the top level, and also inside the specific element
++    if (data.status !== 'OK' || data.rows?.[0]?.elements?.[0]?.status !== 'OK') {
++      throw new HttpException(
++        `Could not calculate a route between these locations (Google status: ${data.status}).`,
++        HttpStatus.BAD_REQUEST,
++      );
++    }
+ 
+-      // Extract the distance in meters and convert to kilometers
+-      const distanceMeters = data.rows[0].elements[0].distance.value;
+-      const distanceKm = distanceMeters / 1000;
++    const distanceMeters = data.rows[0].elements[0].distance.value;
++    const distanceKm = distanceMeters / 1000;
+ 
+-      // Pricing Logic: Base fee of 50 Ksh + 30 Ksh per Km
+-      const baseFee = 50;
+-      const perKmRate = 30;
+-      const deliveryFee = Math.round(baseFee + (distanceKm * perKmRate));
++    // Pricing Logic: Base fee of 50 Ksh + 30 Ksh per Km
++    const baseFee = 50;
++    const perKmRate = 30;
++    const deliveryFee = Math.round(baseFee + (distanceKm * perKmRate));
+ 
+-      return { distanceKm, deliveryFee };
+-      
+-    } catch (error) {
+-      throw new HttpException('Logistics routing failed', HttpStatus.INTERNAL_SERVER_ERROR);
+-    }
++    return { distanceKm, deliveryFee };
+   }
+ }
+\ No newline at end of file
+diff --git a/greengrocer_app/.env.example b/greengrocer_app/.env.example
+new file mode 100644
+index 0000000..104eec8
+--- /dev/null
++++ b/greengrocer_app/.env.example
+@@ -0,0 +1,13 @@
++# Copy this file to .env in this same folder (greengrocer_app/) and fill in
++# real values. .env is already gitignored — never commit real keys.
++
++# Your backend's public URL (ngrok tunnel while developing, real domain in prod)
++API_BASE_URL="https://your-ngrok-or-prod-domain"
++
++# --- Google Maps (all from the same Cloud Console project) ---
++MAPS_SDK_KEY=""
++GEOCODING_API_KEY=""
++PLACES_API_KEY=""
++# Powers the route polyline drawn on the map (Directions API) — enable
++# "Directions API" for this key in Google Cloud Console.
++DIRECTIONS_API_KEY=""
+diff --git a/greengrocer_app/lib/main.dart b/greengrocer_app/lib/main.dart
+index a94a7cc..f02a4b5 100644
+--- a/greengrocer_app/lib/main.dart
++++ b/greengrocer_app/lib/main.dart
+@@ -555,8 +555,10 @@ class LoginScreen extends StatefulWidget {
+ 
+ class _LoginScreenState extends State<LoginScreen> {
+   final TextEditingController _phoneController = TextEditingController();
++  final TextEditingController _emailController = TextEditingController();
+   final _auth = AuthService();
+   bool isLoading = false;
++  bool _useEmail = false;
+ 
+   Future<void> _handleLoginResult(String? result) async {
+     setState(() => isLoading = false);
+@@ -593,14 +595,19 @@ class _LoginScreenState extends State<LoginScreen> {
+ 
+   void _attemptLogin() async {
+     if (_phoneController.text.length < 9) return;
++    if (_useEmail && _emailController.text.trim().isEmpty) {
++      _showErrorSnack(context, 'Enter an email address to receive the code there.');
++      return;
++    }
+     FocusScope.of(context).unfocus();
+     setState(() => isLoading = true);
+ 
+     try {
+       final phoneNumber = '+254${_phoneController.text.trim()}';
+-      
+-      // 1. Request the OTP from the backend
+-      await _auth.requestOtp(phoneNumber);
++      final email = _useEmail ? _emailController.text.trim() : null;
++
++      // 1. Request the OTP from the backend — via SMS or email
++      await _auth.requestOtp(phoneNumber, channel: _useEmail ? 'email' : 'sms', email: email);
+ 
+       if (!mounted) return;
+       setState(() => isLoading = false);
+@@ -609,7 +616,7 @@ class _LoginScreenState extends State<LoginScreen> {
+       Navigator.push(
+         context,
+         MaterialPageRoute(
+-          builder: (context) => OtpVerifyScreen(phone: phoneNumber),
++          builder: (context) => OtpVerifyScreen(phone: phoneNumber, deliveredTo: _useEmail ? email! : phoneNumber),
+         ),
+       );
+     } catch (e) {
+@@ -624,14 +631,11 @@ class _LoginScreenState extends State<LoginScreen> {
+   void _quickLogin(String testPhone) async {
+     setState(() => isLoading = true);
+     try {
+-      // System shortcuts (ADMIN_SYSTEM, VENDOR_SYSTEM, etc.) 
+-      // verify using a dummy code to bypass physical SMS during testing
+-      final data = await _auth.verifyOtp(testPhone, '0000'); 
+-      
+-      if (!mounted) return;
+-      
+-      // Navigate straight to home based on role
+-      Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
++      // System shortcuts (ADMIN_SYSTEM, VENDOR_SYSTEM, etc.) verify using a
++      // dummy code — the backend now bypasses the real OTP check for these
++      // three specific test accounts (see AuthService.verifyOtp).
++      final data = await _auth.verifyOtp(testPhone, '0000');
++      await _handleLoginResult(data['role']);
+     } catch (e) {
+       if (!mounted) return;
+       setState(() => isLoading = false);
+@@ -666,6 +670,21 @@ class _LoginScreenState extends State<LoginScreen> {
+               Text('Enter your mobile number', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
+               const SizedBox(height: 24),
+               ProfessionalPhoneInput(phoneController: _phoneController),
++              const SizedBox(height: 16),
++              InkWell(
++                onTap: () => setState(() => _useEmail = !_useEmail),
++                child: Row(
++                  children: [
++                    Icon(_useEmail ? Icons.check_box : Icons.check_box_outline_blank, size: 20, color: isDark ? Colors.greenAccent : Colors.green[700]),
++                    const SizedBox(width: 8),
++                    Text('Send my code by email instead of SMS', style: TextStyle(color: isDark ? Colors.grey[300] : Colors.grey[700], fontSize: 13)),
++                  ],
++                ),
++              ),
++              if (_useEmail) ...[
++                const SizedBox(height: 12),
++                _buildStyledTextField(_emailController, 'your@email.com', isDark),
++              ],
+               const SizedBox(height: 24),
+               isLoading
+                   ? const Center(child: CircularProgressIndicator())
+@@ -3912,6 +3931,10 @@ class _ChatScreenState extends State<ChatScreen> {
+ 
+   @override
+   Widget build(BuildContext context) {
++    final isDark = Theme.of(context).brightness == Brightness.dark;
++    final theirBubbleColor = isDark ? Colors.grey[800] : Colors.grey[300];
++    final theirTextColor = isDark ? Colors.white : Colors.black;
++
+     return Scaffold(
+       appBar: AppBar(title: Text('Order #${widget.orderId.substring(0, 8)}')),
+       body: Column(
+@@ -3933,12 +3956,12 @@ class _ChatScreenState extends State<ChatScreen> {
+                             child: Container(
+                               margin: const EdgeInsets.symmetric(vertical: 4),
+                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+-                              decoration: BoxDecoration(color: isMe ? Colors.green[700] : Colors.grey[300], borderRadius: BorderRadius.circular(16)),
++                              decoration: BoxDecoration(color: isMe ? Colors.green[700] : theirBubbleColor, borderRadius: BorderRadius.circular(16)),
+                               child: Column(
+                                 crossAxisAlignment: CrossAxisAlignment.start,
+                                 children: [
+-                                  if (!isMe) Text(m['sender_role'] ?? '', style: TextStyle(fontSize: 10, color: Colors.grey[700], fontWeight: FontWeight.bold)),
+-                                  Text(m['message'] ?? '', style: TextStyle(color: isMe ? Colors.white : Colors.black)),
++                                  if (!isMe) Text(m['sender_role'] ?? '', style: TextStyle(fontSize: 10, color: isDark ? Colors.grey[400] : Colors.grey[700], fontWeight: FontWeight.bold)),
++                                  Text(m['message'] ?? '', style: TextStyle(color: isMe ? Colors.white : theirTextColor)),
+                                 ],
+                               ),
+                             ),
+@@ -3954,7 +3977,8 @@ class _ChatScreenState extends State<ChatScreen> {
+                   Expanded(
+                     child: TextField(
+                       controller: _messageCtrl,
+-                      decoration: InputDecoration(hintText: 'Type a message...', filled: true, fillColor: Colors.grey[200], border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(horizontal: 16)),
++                      style: TextStyle(color: isDark ? Colors.white : Colors.black),
++                      decoration: InputDecoration(hintText: 'Type a message...', filled: true, fillColor: isDark ? Colors.grey[800] : Colors.grey[200], border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(horizontal: 16)),
+                       onSubmitted: (_) => _send(),
+                     ),
+                   ),
+diff --git a/greengrocer_app/lib/screens/auth/otp_verify_screen.dart b/greengrocer_app/lib/screens/auth/otp_verify_screen.dart
+index 20a93ec..fcf204d 100644
+--- a/greengrocer_app/lib/screens/auth/otp_verify_screen.dart
++++ b/greengrocer_app/lib/screens/auth/otp_verify_screen.dart
+@@ -1,9 +1,12 @@
+ import 'package:flutter/material.dart';
++import 'package:provider/provider.dart';
+ import '../../services/auth_service.dart';
++import '../../main.dart';
+ 
+ class OtpVerifyScreen extends StatefulWidget {
+   final String phone;
+-  const OtpVerifyScreen({super.key, required this.phone});
++  final String deliveredTo;
++  const OtpVerifyScreen({super.key, required this.phone, required this.deliveredTo});
+ 
+   @override
+   State<OtpVerifyScreen> createState() => _OtpVerifyScreenState();
+@@ -24,14 +27,43 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
+ 
+     setState(() => _isLoading = true);
+     try {
+-      await _authService.verifyOtp(widget.phone, _codeController.text);
+-      Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
++      final data = await _authService.verifyOtp(widget.phone, _codeController.text);
++      if (!mounted) return;
++
++      // Fixed: this used to push a named route ('/home') that was never
++      // registered anywhere in MaterialApp, which crashed on every
++      // successful verification. Now it routes by role — same pattern
++      // LoginScreen uses — and loads RoleProvider's session data first so
++      // the destination dashboard actually has vendor_id/rider_id/wallet
++      // ready immediately.
++      await context.read<RoleProvider>().loadSession();
++      if (!mounted) return;
++
++      final roleProvider = context.read<RoleProvider>();
++      final role = data['role'];
++
++      Widget destination;
++      if (role == 'VENDOR' && roleProvider.vendorId != null) {
++        destination = VendorDashboardScreen(vendorId: roleProvider.vendorId!);
++      } else if (role == 'RIDER' && roleProvider.riderId != null) {
++        destination = RiderDashboardScreen(riderId: roleProvider.riderId!);
++      } else if (role == 'ADMIN') {
++        destination = const AdminDashboardScreen();
++      } else {
++        destination = MainNavigation(userPhone: widget.phone);
++      }
++
++      Navigator.of(context).pushAndRemoveUntil(
++        MaterialPageRoute(builder: (context) => destination),
++        (route) => false,
++      );
+     } catch (e) {
++      if (!mounted) return;
+       ScaffoldMessenger.of(context).showSnackBar(
+         SnackBar(content: Text('Verification failed: $e')),
+       );
+     } finally {
+-      setState(() => _isLoading = false);
++      if (mounted) setState(() => _isLoading = false);
+     }
+   }
+ 
+@@ -44,7 +76,7 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
+         child: Column(
+           mainAxisAlignment: MainAxisAlignment.center,
+           children: [
+-            Text('Enter the code sent to ${widget.phone}', style: const TextStyle(fontSize: 16)),
++            Text('Enter the code sent to ${widget.deliveredTo}', style: const TextStyle(fontSize: 16)),
+             const SizedBox(height: 20),
+             TextField(
+               controller: _codeController,
+@@ -61,9 +93,9 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
+               height: 50,
+               child: ElevatedButton(
+                 onPressed: _isLoading ? null : _verifyOtp,
+-                child: _isLoading 
+-                  ? const CircularProgressIndicator(color: Colors.white) 
+-                  : const Text('Verify & Login'),
++                child: _isLoading
++                    ? const CircularProgressIndicator(color: Colors.white)
++                    : const Text('Verify & Login'),
+               ),
+             ),
+           ],
+@@ -71,4 +103,4 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen> {
+       ),
+     );
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/greengrocer_app/lib/services/auth_service.dart b/greengrocer_app/lib/services/auth_service.dart
+index 2e6c963..b9c5a6c 100644
+--- a/greengrocer_app/lib/services/auth_service.dart
++++ b/greengrocer_app/lib/services/auth_service.dart
+@@ -60,14 +60,14 @@ class AuthService {
+   // AUTH & OTP
+   // ===========================================================================
+ 
+-  Future<void> requestOtp(String phone) async {
++  Future<void> requestOtp(String phone, {String channel = 'sms', String? email}) async {
+     final response = await http.post(
+       Uri.parse('$baseUrl/auth/request-otp'),
+       headers: {
+         'Content-Type': 'application/json',
+         'ngrok-skip-browser-warning': 'true',
+       },
+-      body: jsonEncode({'phone': phone}),
++      body: jsonEncode({'phone': phone, 'channel': channel, if (email != null) 'email': email}),
+     );
+     _decodeOrThrow(response);
+   }

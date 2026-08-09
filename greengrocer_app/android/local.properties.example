@@ -1,0 +1,9 @@
+# Copy this file to local.properties (same folder) and fill in your real
+# key. local.properties is already gitignored — never commit real keys.
+#
+# This is the SAME key as MAPS_SDK_KEY in your app-level .env — Android's
+# native map renderer reads it from here (via build.gradle.kts ->
+# AndroidManifest.xml), not from Dart/.env, since Dart code can't reach
+# into native manifest config at build time.
+
+MAPS_API_KEY=AIzaSy_your_real_maps_sdk_key_here

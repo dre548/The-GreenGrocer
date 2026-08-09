@@ -24,8 +24,8 @@ export class AuthController {
 
   // 2. OTP FLOW
   @Post('request-otp')
-  async requestOtp(@Body('phone') phone: string) {
-    return this.authService.requestOtp(phone);
+  async requestOtp(@Body() body: { phone: string; channel?: 'sms' | 'email'; email?: string }) {
+    return this.authService.requestOtp(body.phone, body.channel ?? 'sms', body.email);
   }
 
   @Post('verify-otp')

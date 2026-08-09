@@ -15,7 +15,7 @@ enum UserRole {
 
 enum ApprovalStatus {
   PENDING
-  ACTIVE    
+  ACTIVE
   REJECTED
 }
 
@@ -69,12 +69,35 @@ enum FraudSeverity {
 enum SupportTicketStatus {
   OPEN
   IN_PROGRESS
+  RESOLVED
   CLOSED
+}
+
+enum PaymentMethodType {
+  SEND_MONEY
+  PAYBILL
+  BUY_GOODS
+}
+
+// Singleton-style config (always just one row) powering the admin-toggleable
+// "can't see the M-Pesa prompt?" fallback note shown at checkout, with
+// manual payment instructions for whichever method the admin has active.
+model PaymentSettings {
+  id                String            @id @default(uuid())
+  active_method     PaymentMethodType @default(SEND_MONEY)
+  send_money_number String?
+  paybill_number    String?
+  paybill_account   String?
+  buy_goods_till    String?
+  note_enabled      Boolean           @default(false)
+  note_text         String?
+  updated_at        DateTime          @updatedAt
 }
 
 model User {
   id                  String   @id @default(uuid())
   phone               String   @unique
+  email               String?  @unique
   name                String
   role                UserRole @default(CUSTOMER)
   cash_wallet_balance Float    @default(0)
@@ -94,10 +117,10 @@ model User {
 model Vendor {
   id              String         @id @default(uuid())
   user_id         String         @unique
-  business_name   String         
-  location        String?        
+  business_name   String
+  location        String?
   opening_hours   String?
-  commission_rate Float?         
+  commission_rate Float?
   status          ApprovalStatus @default(PENDING)
   wallet_balance  Float          @default(0)
   is_open         Boolean        @default(true)
@@ -110,9 +133,9 @@ model Vendor {
 model Rider {
   id             String         @id @default(uuid())
   user_id        String         @unique
-  vehicle_type   String         
+  vehicle_type   String
   plate_number   String
-  id_front_url   String         
+  id_front_url   String
   id_back_url    String
   status         ApprovalStatus @default(PENDING)
   wallet_balance Float          @default(0)
@@ -122,17 +145,17 @@ model Rider {
 }
 
 model Product {
-  id          String   @id @default(uuid())
-  vendor_id   String?
-  name        String
-  price       Int
-  emoji       String?  
-  unit        String
-  image_url   String?  
-  in_stock    Boolean  @default(true)
-  created_at  DateTime @default(now())
+  id         String   @id @default(uuid())
+  vendor_id  String?
+  name       String
+  price      Int
+  emoji      String?
+  unit       String
+  image_url  String?
+  in_stock   Boolean  @default(true)
+  created_at DateTime @default(now())
 
-  vendor      Vendor?  @relation(fields: [vendor_id], references: [id])
+  vendor     Vendor?  @relation(fields: [vendor_id], references: [id])
 }
 
 model Order {
@@ -148,9 +171,9 @@ model Order {
   status         OrderStatus @default(PLACED)
   created_at     DateTime    @default(now())
 
-  customer       User        @relation(fields: [customer_id], references: [id])
-  vendor         Vendor      @relation(fields: [vendor_id], references: [id])
-  rider          Rider?      @relation(fields: [rider_id], references: [id])
+  customer       User          @relation(fields: [customer_id], references: [id])
+  vendor         Vendor        @relation(fields: [vendor_id], references: [id])
+  rider          Rider?        @relation(fields: [rider_id], references: [id])
   transactions   Transaction[]
   ratings        Rating[]
   disputes       Dispute[]

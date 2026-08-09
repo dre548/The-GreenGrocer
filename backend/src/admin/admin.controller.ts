@@ -101,4 +101,18 @@ export class AdminController {
   getRevenueSummary() {
     return this.adminService.getRevenueSummary();
   }
+
+  // --- Payment Settings (M-Pesa fallback note) ---
+  // GET is intentionally public — the customer checkout screen needs to
+  // read this without an admin token to show the fallback note.
+  @Get('payment-settings')
+  getPaymentSettings() {
+    return this.adminService.getPaymentSettings();
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch('payment-settings')
+  updatePaymentSettings(@Body() body: any) {
+    return this.adminService.updatePaymentSettings(body);
+  }
 }

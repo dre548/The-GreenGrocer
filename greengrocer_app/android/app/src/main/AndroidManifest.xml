@@ -10,10 +10,13 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         
-        <!-- Google Maps API Key (Keep this as API Key 1) -->
+        <!-- Google Maps API Key — no longer hardcoded here. Comes from
+             android/local.properties (gitignored) via manifestPlaceholders
+             in build.gradle.kts. Copy local.properties.example to
+             local.properties and fill in your real key. -->
         <meta-data 
             android:name="com.google.android.geo.API_KEY" 
-            android:value="AIzaSyBs64tAAvZpC34zwSvYascVcLoacYUrw-w"/>
+            android:value="${MAPS_API_KEY}"/>
 
         <activity
             android:name=".MainActivity"

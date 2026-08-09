@@ -555,8 +555,10 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final _auth = AuthService();
   bool isLoading = false;
+  bool _useEmail = false;
 
   Future<void> _handleLoginResult(String? result) async {
     setState(() => isLoading = false);
@@ -593,14 +595,19 @@ class _LoginScreenState extends State<LoginScreen> {
 
   void _attemptLogin() async {
     if (_phoneController.text.length < 9) return;
+    if (_useEmail && _emailController.text.trim().isEmpty) {
+      _showErrorSnack(context, 'Enter an email address to receive the code there.');
+      return;
+    }
     FocusScope.of(context).unfocus();
     setState(() => isLoading = true);
 
     try {
       final phoneNumber = '+254${_phoneController.text.trim()}';
-      
-      // 1. Request the OTP from the backend
-      await _auth.requestOtp(phoneNumber);
+      final email = _useEmail ? _emailController.text.trim() : null;
+
+      // 1. Request the OTP from the backend — via SMS or email
+      await _auth.requestOtp(phoneNumber, channel: _useEmail ? 'email' : 'sms', email: email);
 
       if (!mounted) return;
       setState(() => isLoading = false);
@@ -609,7 +616,7 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => OtpVerifyScreen(phone: phoneNumber),
+          builder: (context) => OtpVerifyScreen(phone: phoneNumber, deliveredTo: _useEmail ? email! : phoneNumber),
         ),
       );
     } catch (e) {
@@ -624,14 +631,11 @@ class _LoginScreenState extends State<LoginScreen> {
   void _quickLogin(String testPhone) async {
     setState(() => isLoading = true);
     try {
-      // System shortcuts (ADMIN_SYSTEM, VENDOR_SYSTEM, etc.) 
-      // verify using a dummy code to bypass physical SMS during testing
-      final data = await _auth.verifyOtp(testPhone, '0000'); 
-      
-      if (!mounted) return;
-      
-      // Navigate straight to home based on role
-      Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
+      // System shortcuts (ADMIN_SYSTEM, VENDOR_SYSTEM, etc.) verify using a
+      // dummy code — the backend now bypasses the real OTP check for these
+      // three specific test accounts (see AuthService.verifyOtp).
+      final data = await _auth.verifyOtp(testPhone, '0000');
+      await _handleLoginResult(data['role']);
     } catch (e) {
       if (!mounted) return;
       setState(() => isLoading = false);
@@ -666,6 +670,21 @@ class _LoginScreenState extends State<LoginScreen> {
               Text('Enter your mobile number', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
               const SizedBox(height: 24),
               ProfessionalPhoneInput(phoneController: _phoneController),
+              const SizedBox(height: 16),
+              InkWell(
+                onTap: () => setState(() => _useEmail = !_useEmail),
+                child: Row(
+                  children: [
+                    Icon(_useEmail ? Icons.check_box : Icons.check_box_outline_blank, size: 20, color: isDark ? Colors.greenAccent : Colors.green[700]),
+                    const SizedBox(width: 8),
+                    Text('Send my code by email instead of SMS', style: TextStyle(color: isDark ? Colors.grey[300] : Colors.grey[700], fontSize: 13)),
+                  ],
+                ),
+              ),
+              if (_useEmail) ...[
+                const SizedBox(height: 12),
+                _buildStyledTextField(_emailController, 'your@email.com', isDark),
+              ],
               const SizedBox(height: 24),
               isLoading
                   ? const Center(child: CircularProgressIndicator())
@@ -1318,6 +1337,45 @@ class BasketsScreen extends StatefulWidget {
 
 class _BasketsScreenState extends State<BasketsScreen> {
   bool _isCheckingOut = false;
+  Map<String, dynamic>? _paymentSettings;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPaymentSettings();
+  }
+
+  Future<void> _loadPaymentSettings() async {
+    try {
+      final settings = await AuthService().getPaymentSettings();
+      if (mounted) setState(() => _paymentSettings = settings);
+    } catch (e) {
+      // Non-fatal — checkout works fine without the fallback note.
+    }
+  }
+
+  String? _buildFallbackMessage() {
+    final settings = _paymentSettings;
+    if (settings == null || settings['note_enabled'] != true) return null;
+
+    final customText = (settings['note_text'] as String?)?.trim();
+    if (customText != null && customText.isNotEmpty) return customText;
+
+    switch (settings['active_method']) {
+      case 'SEND_MONEY':
+        final number = settings['send_money_number'] ?? '—';
+        return "Didn't get the M-Pesa prompt? Send money directly to $number.";
+      case 'PAYBILL':
+        final biz = settings['paybill_number'] ?? '—';
+        final acc = settings['paybill_account'] ?? '—';
+        return "Didn't get the M-Pesa prompt? Pay via Paybill $biz, Account: $acc.";
+      case 'BUY_GOODS':
+        final till = settings['buy_goods_till'] ?? '—';
+        return "Didn't get the M-Pesa prompt? Pay via Buy Goods, Till: $till.";
+      default:
+        return null;
+    }
+  }
 
   Future<void> _checkout(CartProvider cart) async {
     setState(() => _isCheckingOut = true);
@@ -1382,6 +1440,22 @@ class _BasketsScreenState extends State<BasketsScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('Total:', style: TextStyle(fontSize: 18)), Text('${cart.totalAmount}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))]),
+                    if (_buildFallbackMessage() != null) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.orange.withOpacity(0.4))),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.info_outline, color: Colors.orange, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text(_buildFallbackMessage()!, style: const TextStyle(fontSize: 12.5, color: Colors.orange))),
+                          ],
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     _isCheckingOut
                         ? const CircularProgressIndicator()
@@ -3227,6 +3301,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   List<dynamic> _zones = [];
   List<dynamic> _supportTickets = [];
   Map<String, dynamic>? _revenue;
+  Map<String, dynamic>? _paymentSettings;
 
   @override
   void initState() {
@@ -3243,6 +3318,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       _zones = await _auth.getZones();
       _supportTickets = await _auth.getSupportTicketsAdmin();
       _revenue = await _auth.getRevenueSummary();
+      _paymentSettings = await _auth.getPaymentSettings();
     } catch (e) {
       if (mounted) _showErrorSnack(context, e);
     } finally {
@@ -3276,6 +3352,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 _buildNavItem(Icons.warning, "Fraud Flags", _selectedTab == "Fraud Flags", accentColor, isMobile),
                 _buildNavItem(Icons.settings, "City/Zone Config", _selectedTab == "City/Zone Config", accentColor, isMobile),
                 _buildNavItem(Icons.support_agent, "Support Queue", _selectedTab == "Support Queue", accentColor, isMobile),
+                _buildNavItem(Icons.payments, "Payment Settings", _selectedTab == "Payment Settings", accentColor, isMobile),
               ],
             ),
           ),
@@ -3307,6 +3384,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       content = _buildZoneConfig(cardColor, isMobile);
     } else if (_selectedTab == "Support Queue") {
       content = _buildSupportQueue(cardColor, isMobile);
+    } else if (_selectedTab == "Payment Settings") {
+      content = _buildPaymentSettings(cardColor, isMobile);
     } else {
       content = Padding(
         padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
@@ -3802,6 +3881,32 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
+  Widget _buildPaymentSettings(Color cardColor, bool isMobile) {
+    final settings = _paymentSettings ?? {};
+    return Padding(
+      padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
+      child: SingleChildScrollView(
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12)),
+          child: _PaymentSettingsForm(
+            initial: settings,
+            onSave: (data) async {
+              try {
+                await _auth.updatePaymentSettings(data);
+                await _loadQueues();
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payment settings saved.')));
+              } catch (e) {
+                if (mounted) _showErrorSnack(context, e);
+              }
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildNavItem(IconData icon, String title, bool isSelected, Color accentColor, bool isMobile, {VoidCallback? onTap}) {
     return InkWell(
       onTap: () {
@@ -3912,6 +4017,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theirBubbleColor = isDark ? Colors.grey[800] : Colors.grey[300];
+    final theirTextColor = isDark ? Colors.white : Colors.black;
+
     return Scaffold(
       appBar: AppBar(title: Text('Order #${widget.orderId.substring(0, 8)}')),
       body: Column(
@@ -3933,12 +4042,12 @@ class _ChatScreenState extends State<ChatScreen> {
                             child: Container(
                               margin: const EdgeInsets.symmetric(vertical: 4),
                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              decoration: BoxDecoration(color: isMe ? Colors.green[700] : Colors.grey[300], borderRadius: BorderRadius.circular(16)),
+                              decoration: BoxDecoration(color: isMe ? Colors.green[700] : theirBubbleColor, borderRadius: BorderRadius.circular(16)),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  if (!isMe) Text(m['sender_role'] ?? '', style: TextStyle(fontSize: 10, color: Colors.grey[700], fontWeight: FontWeight.bold)),
-                                  Text(m['message'] ?? '', style: TextStyle(color: isMe ? Colors.white : Colors.black)),
+                                  if (!isMe) Text(m['sender_role'] ?? '', style: TextStyle(fontSize: 10, color: isDark ? Colors.grey[400] : Colors.grey[700], fontWeight: FontWeight.bold)),
+                                  Text(m['message'] ?? '', style: TextStyle(color: isMe ? Colors.white : theirTextColor)),
                                 ],
                               ),
                             ),
@@ -3954,7 +4063,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _messageCtrl,
-                      decoration: InputDecoration(hintText: 'Type a message...', filled: true, fillColor: Colors.grey[200], border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(horizontal: 16)),
+                      style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                      decoration: InputDecoration(hintText: 'Type a message...', filled: true, fillColor: isDark ? Colors.grey[800] : Colors.grey[200], border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(horizontal: 16)),
                       onSubmitted: (_) => _send(),
                     ),
                   ),
@@ -3966,6 +4076,132 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ============================================================================
+// PAYMENT SETTINGS FORM — lets the admin pick exactly one M-Pesa collection
+// method (Send Money / Paybill / Buy Goods), enter the number(s) for it,
+// and toggle whether the fallback note showing those instructions appears
+// on the customer's checkout screen. Backed by the singleton
+// PaymentSettings table (GET/PATCH /admin/payment-settings).
+// ============================================================================
+class _PaymentSettingsForm extends StatefulWidget {
+  final Map<String, dynamic> initial;
+  final Future<void> Function(Map<String, dynamic> data) onSave;
+  const _PaymentSettingsForm({required this.initial, required this.onSave});
+
+  @override
+  State<_PaymentSettingsForm> createState() => _PaymentSettingsFormState();
+}
+
+class _PaymentSettingsFormState extends State<_PaymentSettingsForm> {
+  late String _method;
+  late bool _noteEnabled;
+  late TextEditingController _sendMoneyCtrl;
+  late TextEditingController _paybillNumberCtrl;
+  late TextEditingController _paybillAccountCtrl;
+  late TextEditingController _tillCtrl;
+  late TextEditingController _noteCtrl;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _method = widget.initial['active_method'] ?? 'SEND_MONEY';
+    _noteEnabled = widget.initial['note_enabled'] ?? false;
+    _sendMoneyCtrl = TextEditingController(text: widget.initial['send_money_number'] ?? '');
+    _paybillNumberCtrl = TextEditingController(text: widget.initial['paybill_number'] ?? '');
+    _paybillAccountCtrl = TextEditingController(text: widget.initial['paybill_account'] ?? '');
+    _tillCtrl = TextEditingController(text: widget.initial['buy_goods_till'] ?? '');
+    _noteCtrl = TextEditingController(text: widget.initial['note_text'] ?? '');
+  }
+
+  Future<void> _save() async {
+    setState(() => _isSaving = true);
+    await widget.onSave({
+      'active_method': _method,
+      'send_money_number': _sendMoneyCtrl.text.trim(),
+      'paybill_number': _paybillNumberCtrl.text.trim(),
+      'paybill_account': _paybillAccountCtrl.text.trim(),
+      'buy_goods_till': _tillCtrl.text.trim(),
+      'note_enabled': _noteEnabled,
+      'note_text': _noteCtrl.text.trim(),
+    });
+    if (mounted) setState(() => _isSaving = false);
+  }
+
+  Widget _methodTile(String value, String label, String hint) {
+    return RadioListTile<String>(
+      value: value,
+      groupValue: _method,
+      activeColor: Colors.orange,
+      onChanged: (v) => setState(() => _method = v!),
+      title: Text(label, style: const TextStyle(color: Colors.white)),
+      subtitle: Text(hint, style: const TextStyle(color: Colors.grey)),
+    );
+  }
+
+  Widget _darkField(TextEditingController ctrl, String label) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextField(
+        controller: ctrl,
+        style: const TextStyle(color: Colors.white),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(color: Colors.grey),
+          filled: true,
+          fillColor: Colors.black26,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Payment Settings", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
+        const Text(
+          "Choose which M-Pesa collection method is active, and whether customers see a fallback note with these details at checkout — useful for when the STK push prompt doesn't show up on their phone.",
+          style: TextStyle(color: Colors.grey, fontSize: 13),
+        ),
+        const SizedBox(height: 20),
+        const Text("Active Method", style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 13)),
+        _methodTile('SEND_MONEY', 'Send Money', 'Customer sends directly to a phone number'),
+        _methodTile('PAYBILL', 'Paybill', 'Business number + account number'),
+        _methodTile('BUY_GOODS', 'Buy Goods', 'Till number'),
+        const SizedBox(height: 12),
+        if (_method == 'SEND_MONEY') _darkField(_sendMoneyCtrl, 'Phone number (e.g. 0712345678)'),
+        if (_method == 'PAYBILL') ...[
+          _darkField(_paybillNumberCtrl, 'Paybill business number'),
+          _darkField(_paybillAccountCtrl, 'Account number'),
+        ],
+        if (_method == 'BUY_GOODS') _darkField(_tillCtrl, 'Till number'),
+        const Divider(color: Colors.grey),
+        SwitchListTile(
+          value: _noteEnabled,
+          activeColor: Colors.green,
+          onChanged: (v) => setState(() => _noteEnabled = v),
+          title: const Text("Show fallback note to customers", style: TextStyle(color: Colors.white)),
+          subtitle: const Text("Appears as a banner on the checkout screen", style: TextStyle(color: Colors.grey)),
+        ),
+        if (_noteEnabled) ...[
+          const SizedBox(height: 8),
+          _darkField(_noteCtrl, 'Custom message (optional — a default is used if left blank)'),
+        ],
+        const SizedBox(height: 12),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 48)),
+          onPressed: _isSaving ? null : _save,
+          child: _isSaving ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Save Payment Settings'),
+        ),
+      ],
     );
   }
 }

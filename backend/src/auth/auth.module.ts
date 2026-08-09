@@ -5,6 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { PrismaService } from '../prisma/prisma.service'; 
+import { MailModule } from '../mail/mail.module';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -18,6 +19,7 @@ function requireEnv(name: string): string {
 
 @Module({
   imports: [
+    MailModule,
     JwtModule.register({
       global: true,
       // Was hardcoded as 'GREEN_GROCER_SUPER_SECRET_KEY' in source — anyone

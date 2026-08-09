@@ -161,4 +161,30 @@ export class AdminService {
       active_customers: activeCustomerIds.size,
     };
   }
+
+  // --- PAYMENT SETTINGS (M-Pesa fallback note shown at checkout) ---
+  // Singleton: always the first row, created on first read if none exists.
+  async getPaymentSettings() {
+    let settings = await this.prisma.paymentSettings.findFirst();
+    if (!settings) {
+      settings = await this.prisma.paymentSettings.create({ data: {} });
+    }
+    return settings;
+  }
+
+  async updatePaymentSettings(data: {
+    active_method?: 'SEND_MONEY' | 'PAYBILL' | 'BUY_GOODS';
+    send_money_number?: string;
+    paybill_number?: string;
+    paybill_account?: string;
+    buy_goods_till?: string;
+    note_enabled?: boolean;
+    note_text?: string;
+  }) {
+    const existing = await this.getPaymentSettings();
+    return this.prisma.paymentSettings.update({
+      where: { id: existing.id },
+      data,
+    });
+  }
 }
